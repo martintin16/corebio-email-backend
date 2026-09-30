@@ -15,7 +15,7 @@ propios (`canSend` / `canRead`), sin compartir la contraseña de la casilla.
 Requisitos: Node 24 LTS (mínimo 22.12; ver `.nvmrc`) y npm.
 
 ```bash
-npm install                # la primera vez genera package-lock.json → commitearlo
+npm ci                     # instala exactamente lo del package-lock.json
 cp .env.example .env       # completar DATABASE_URL con la contraseña real
 npm run migration:run      # crea las tablas en Supabase (una vez por migración nueva)
 npm run start:dev          # http://localhost:4000
@@ -73,7 +73,8 @@ Si falta una obligatoria o tiene un formato inválido, la app **no arranca** y d
    - corre las migraciones pendientes (`preDeployCommand` → `npm run migration:run:prod`);
    - espera a que `GET /health` responda 200 antes de pasar tráfico.
 
-> `npm ci` en el Dockerfile necesita `package-lock.json` commiteado.
+> `npm ci` en el Dockerfile usa el `package-lock.json` del repo: toda dependencia
+> nueva se commitea junto con el lockfile actualizado.
 
 **Conexión directa vs. IPv6:** la connection string directa de Supabase
 (`db.<ref>.supabase.co`) es solo IPv6. Si el deploy falla con errores de conexión
@@ -177,15 +178,21 @@ Códigos de respuesta:
 - **Puerto local 4000**, para no chocar con `next dev` (3000).
 - **Node 24 LTS** en Docker. Node 20 (propuesto al principio) llegó a fin de vida en
   abril de 2026.
+- **`.gitattributes` con `* text=auto eol=lf`**: todo el repo usa saltos de línea LF,
+  también en Windows. Sin esto, Prettier marcaba cada línea con `Delete ␍`.
+- **`tsBuildInfoFile` dentro de `dist/`** (en `tsconfig.build.json`): `nest build` borra
+  `dist/` antes de compilar. Si la caché incremental de tsc queda afuera, tsc cree que no
+  hay cambios y el segundo build termina sin generar nada. Así la caché se borra junto
+  con `dist/`.
 
 **Verificación**
-- ⚠️ **No se compiló ni se corrieron los tests en el entorno donde se generó el código**:
-  ese entorno no tiene acceso al registry de npm. La verificación de build, lint y
-  tests la hace el equipo en local, en cada fase.
-- A verificar manualmente:
-  - Que la migración corra contra Supabase (en particular, el trigger sobre `auth.users`).
-  - `GET /health` y `GET /me` con un token real.
-  - El deploy en Railway (conexión IPv6 vs. Session pooler).
+- El código se generó en un entorno sin acceso al registry de npm. Build, lint y tests
+  los corre el equipo en local, en cada fase.
+- ✅ Verificado en local: `build`, `lint`, `test` y `test:e2e` pasan.
+- ✅ Verificado contra Supabase: la migración `CreateUserProfiles` está aplicada y
+  `GET /health` y `GET /me` responden bien con un token real (200 con token; 401 sin
+  token o con token inválido).
+- ⏳ Falta: el primer deploy en Railway (conexión IPv6 vs. Session pooler).
 
 ### ⏳ Pendiente
 
