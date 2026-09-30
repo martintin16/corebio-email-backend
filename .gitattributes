@@ -1,0 +1,2 @@
+# Forzar saltos de línea LF en todo el repo (evita errores de prettier en Windows)
+* text=auto eol=lf
