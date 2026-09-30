@@ -6,7 +6,7 @@ import { UsersService } from './users.service';
 /**
  * Usuarios de Corebio Mail.
  * Fase 0: entidad + lectura de perfil (la usa AuthModule).
- * Fase 1: UsersController con GET/POST /users, permisos, desactivar, reenviar invitación.
+ * Fase 2: UsersController con GET/POST /users, permisos, desactivar, reenviar invitación.
  */
 @Module({
   imports: [TypeOrmModule.forFeature([UserProfile])],

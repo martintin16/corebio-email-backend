@@ -98,14 +98,16 @@ src/
   database/               opciones de TypeORM, DataSource del CLI, migrations/
   auth/                   JWT de Supabase, guards globales, decorators, GET /me
   health/                 GET /health (Railway)
-  users/                  user_profiles (Fase 0: entidad + lectura; Fase 1: CRUD)
-  mailboxes/              Fase 2 (módulo vacío)
-  messages/               Fase 3 (módulo vacío)
-  scheduled-messages/     Fase 4 (módulo vacío)
-  templates/              Fase 5 (módulo vacío)
-  drive-access/           Fase 6 (módulo vacío)
+  common/                 helpers transversales (errores de Postgres, transforms de DTOs)
+  users/                  user_profiles (Fase 0: entidad + lectura; Fase 2: CRUD)
+  mailboxes/              casillas, permisos por casilla, @RequireMailboxAccess (Fase 1)
+  messages/               Fase 4 (módulo vacío)
+  scheduled-messages/     Fase 5 (módulo vacío)
+  templates/              Fase 6 (módulo vacío)
+  drive-access/           Fase 7 (módulo vacío)
 test/
   utils/jwt.ts            simula a Supabase Auth con claves ES256 propias
+  utils/test-app.ts       app de prueba con la auth real y Supabase/DB simulados
   *.e2e-spec.ts           tests HTTP de punta a punta
 ```
 
@@ -126,13 +128,58 @@ Todo endpoint requiere token **por defecto**. Hay dos guards globales, en este o
 
 Decorators: `@Public()` (sin token), `@Roles(...)`, `@CurrentUser()`.
 
+Además, todo lo que opera sobre el **contenido** de una casilla (mensajes, programados,
+plantillas, Drive) usa `@RequireMailboxAccess('read' | 'send')`, que lee `:mailboxId`
+de la ruta y exige ese permiso en `mailbox_access`. **Ser admin no da acceso
+implícito**: el admin gestiona casillas y permisos, pero para leer o enviar necesita
+tener el permiso asignado como cualquier usuario.
+
 Códigos de respuesta:
 
 | Caso | Código |
 |---|---|
 | Sin token, token mal formado, vencido o mal firmado | 401 |
 | Token válido pero sin perfil, desactivado o sin el rol pedido | 403 |
+| Sin el permiso pedido sobre la casilla (o la casilla no existe) | 403 |
 | No se pudo obtener el JWKS de Supabase (caído / timeout) | 503 |
+
+### Endpoints
+
+| Método y ruta | Quién | Fase | Descripción |
+|---|---|---|---|
+| `GET /health` | público | 0 | Healthcheck (API + DB) |
+| `GET /me` | logueado | 0 | `{ id, email, role }` del usuario actual |
+| `GET /mailboxes` | admin | 1 | `AdminMailbox[]` |
+| `POST /mailboxes` | admin | 1 | Alta `{ email, displayName }` → `AdminMailbox` (409 si el email existe) |
+| `PATCH /mailboxes/:id` | admin | 1 | `{ displayName }` → `AdminMailbox` |
+| `DELETE /mailboxes/:id` | admin | 1 | Desconecta (borra casilla y accesos) → 204 |
+| `POST /mailboxes/:id/reconnect` | admin | 1 | **501** hasta la Fase 3 (OAuth de Google) |
+| `GET /me/mailboxes` | logueado | 1 | `Mailbox[]` a las que el usuario tiene algún permiso |
+
+Los tipos de respuesta son los mismos que usa el frontend (`lib/types/*.ts`).
+
+---
+
+## Puesta en producción (checklist)
+
+Tareas de configuración (no de código) antes de presentarlo a Corebio:
+
+- [ ] **SMTP propio en Supabase** (Authentication → Emails → SMTP Settings).
+  - El SMTP incluido en Supabase solo envía a miembros del equipo del proyecto y con
+    un límite muy bajo por hora: no sirve para invitar a otras personas.
+  - Para pruebas (Fase 2): Brevo con un remitente verificado (un Gmail propio), sin DNS.
+  - Para Corebio: remitente `@corebio.org` con SPF/DKIM en el DNS de `corebio.org`
+    (lo configura la gente de IT de Corebio).
+- [ ] **Redirect URLs** (Authentication → URL Configuration): incluir
+  `http://localhost:3000/reset-password` y
+  `https://corebio-email-collection.vercel.app/reset-password`.
+- [ ] **Plantillas de email** (Authentication → Emails → Templates), para que los links
+  funcionen con el flujo PKCE del frontend y desde cualquier dispositivo:
+  - Invite user: `{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=invite`
+  - Reset password: `{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=recovery`
+  - Requiere el cambio del frontend en `/reset-password` (rama
+    `fix/invite-link-token-hash` del repo del front).
+- [ ] **Deploy en Railway** (ver arriba) y agregar la URL del backend al frontend.
 
 ---
 
@@ -156,7 +203,7 @@ Códigos de respuesta:
   - Desactivar a alguien o cambiarle el rol tiene efecto en el próximo request, sin
     esperar a que venza su token (hasta 1 h).
   - El costo es una query por PK por request, despreciable a esta escala.
-  - `app_metadata.role` se va a seguir actualizando (Fase 1), pero solo para que el
+  - `app_metadata.role` se va a seguir actualizando (Fase 2), pero solo para que el
     frontend oculte UI.
 - **`user_profiles` en vez de `users`.**
   - Evita confundirse con `auth.users`.
@@ -174,7 +221,7 @@ Códigos de respuesta:
   - El backend se conecta como `postgres` (dueño de la tabla), que no está sujeto a RLS.
   - **Toda tabla nueva en fases siguientes lleva lo mismo.**
 - **Usuarios `invited` pueden autenticarse.** Tener sesión válida implica que ya
-  aceptaron la invitación. El pasaje `invited → active` se resuelve en la Fase 1.
+  aceptaron la invitación. El pasaje `invited → active` se resuelve en la Fase 2 (Users).
 - **Puerto local 4000**, para no chocar con `next dev` (3000).
 - **Node 24 LTS** en Docker. Node 20 (propuesto al principio) llegó a fin de vida en
   abril de 2026.
@@ -194,19 +241,69 @@ Códigos de respuesta:
   token o con token inválido).
 - ⏳ Falta: el primer deploy en Railway (conexión IPv6 vs. Session pooler).
 
+### ✅ Fase 1 — Mailboxes (sin Google)
+
+**Qué se construyó**
+- Migración `CreateMailboxes`: tablas `mailboxes` y `mailbox_access`, con el mismo
+  cerrojo de RLS que `user_profiles`.
+- Endpoints de admin: `GET/POST /mailboxes`, `PATCH/DELETE /mailboxes/:id`,
+  `POST /mailboxes/:id/reconnect` (501 hasta la Fase 3).
+- `GET /me/mailboxes` para cualquier usuario logueado.
+- `MailboxAccessService` (exportado): permisos de un usuario sobre una casilla,
+  `mailboxAccess` por usuario y reemplazo completo del campo `access` del frontend.
+  Lo usa Users en la Fase 2.
+- `@RequireMailboxAccess('read' | 'send')` + `MailboxAccessGuard`: la barrera de
+  seguridad de Messages, Scheduled, Templates y Drive.
+- `configureApp()` (`src/app.setup.ts`): la misma `ValidationPipe` para producción y tests.
+- Tests unitarios (servicios, guard, errores de Postgres) y e2e (endpoints + guard).
+
+**Decisiones**
+- **Orden de fases cambiado: Mailboxes antes que Users.** `mailbox_access` une usuarios
+  (que ya existen desde la Fase 0) con casillas (que no existían). Construyendo primero
+  lo que faltaba, cada módulo se cierra una sola vez. El OAuth de Google pasa a ser su
+  propia fase (3), para no mezclar la pieza más delicada con un CRUD.
+- **Email de la casilla en minúsculas y único**, garantizado por la base (CHECK +
+  UNIQUE), no solo por el DTO. Un email repetido responde 409 aunque dos requests
+  lleguen a la vez.
+- **`authType` y `status` desde ahora.** `authType` (`oauth` | `domain_wide`) permite
+  sumar domain-wide delegation más adelante sin migrar el esquema. `status` arranca en
+  `needs_reconnect` hasta que exista el OAuth (Fase 3). Las columnas del token de Google
+  se agregan en la Fase 3.
+- **`mailbox_access` solo guarda filas con algún permiso** (CHECK `can_send OR can_read`):
+  "sin acceso" = no hay fila. Guardar permisos reemplaza el set completo del usuario en
+  una transacción, igual que manda el frontend (`access: Record<mailboxId, ...>`).
+- **`connectedUsersCount` cuenta a todos los usuarios con acceso**, incluidos los
+  desactivados: mismo criterio que los mocks del frontend y que la lista "Ver usuarios
+  con acceso".
+- **Ser admin no da acceso al contenido de las casillas** (ver Autenticación).
+- **Casilla inexistente o sin permiso → 403 en ambos casos** en `@RequireMailboxAccess`,
+  para no revelar qué ids existen.
+- **`GET /mailboxes/:id/access` se movió a la Fase 2.** Según el frontend
+  (`getMailboxAccessList`) devuelve `{ user: AdminUser, access: MailboxAccessSummary }[]`,
+  o sea datos completos de usuario: corresponde al módulo de Users.
+- **No se restringe el dominio de las casillas a `@corebio.org`**: en desarrollo se usan
+  cuentas de Gmail propias.
+
+**Verificación**
+- Igual que la Fase 0: build, lint y tests los corre el equipo en local.
+- A verificar contra Supabase: `npm run migration:run` (crea `mailboxes` y
+  `mailbox_access`) y los endpoints con un token de admin real.
+
 ### ⏳ Pendiente
 
-- **Fase 1 — Users:**
-  - CRUD de admin.
-  - Invitación vía Supabase Admin API (requiere `SUPABASE_SERVICE_ROLE_KEY`).
-  - Sincronizar `app_metadata.role`.
-  - Transición `invited → active`.
-- **Fase 2 — Mailboxes:**
-  - CRUD y `mailbox_access`.
-  - OAuth de Google por casilla, con `refresh_token` encriptado (AES-256-GCM) y campo
-    `authType: 'oauth' | 'domain_wide'`.
-  - Interfaz `GoogleMailboxClient.forMailbox(mailboxId)`.
-- **Fase 3 — Messages/Sent** (Gmail API).
-- **Fase 4 — Scheduled messages** (tabla + job periódico).
-- **Fase 5 — Templates.**
-- **Fase 6 — Drive access** (Drive API).
+- **Fase 2 — Users:**
+  - CRUD de admin + `GET /mailboxes/:id/access`.
+  - Invitación vía Supabase Admin API (requiere `SUPABASE_SERVICE_ROLE_KEY`), con
+    `redirectTo` a `<FRONTEND_URL>/reset-password`.
+  - Sincronizar `app_metadata.role`; transición `invited → active`; ban en Supabase al
+    desactivar; reglas de "no quedarse sin admins".
+  - Antes de probar invitaciones: SMTP de pruebas (ver checklist).
+- **Fase 3 — Google:**
+  - OAuth por casilla, con `refresh_token` encriptado (AES-256-GCM).
+  - Interfaz `GoogleMailboxClient.forMailbox(mailboxId)`, que elige la implementación
+    según `authType`.
+  - `POST /mailboxes/:id/reconnect` real y revocar el token al desconectar.
+- **Fase 4 — Messages/Sent** (Gmail API).
+- **Fase 5 — Scheduled messages** (tabla + job periódico).
+- **Fase 6 — Templates.**
+- **Fase 7 — Drive access** (Drive API).

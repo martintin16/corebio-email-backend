@@ -1,8 +1,9 @@
-import { Logger, ValidationPipe } from '@nestjs/common';
+import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
+import { configureApp } from './app.setup';
 import { parseCorsOrigins } from './config/cors';
 
 async function bootstrap() {
@@ -15,13 +16,7 @@ async function bootstrap() {
     // Auth va por header Authorization (Bearer), no por cookies.
     credentials: false,
   });
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-    }),
-  );
+  configureApp(app);
   app.enableShutdownHooks();
 
   const port = Number(config.get('PORT') ?? 4000);

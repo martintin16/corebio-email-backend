@@ -1,10 +1,21 @@
 import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { MailboxAccess } from './entities/mailbox-access.entity';
+import { Mailbox } from './entities/mailbox.entity';
+import { MailboxAccessGuard } from './guards/mailbox-access.guard';
+import { MailboxAccessService } from './mailbox-access.service';
+import { MailboxesController, MeMailboxesController } from './mailboxes.controller';
+import { MailboxesService } from './mailboxes.service';
 
 /**
- * Fase 2 — Casillas institucionales (admin).
- * CRUD de `mailboxes` + `mailbox_access` (canSend/canRead por usuario), GET /me/mailboxes,
- * flujo OAuth de Google por casilla (refresh_token encriptado, campo `authType`)
- * y la interfaz `GoogleMailboxClient.forMailbox(mailboxId)`.
+ * Casillas institucionales y permisos por casilla.
+ * Fase 1: CRUD de admin, GET /me/mailboxes, MailboxAccessService y el guard
+ * `@RequireMailboxAccess`. Fase 3 suma el OAuth de Google y GoogleMailboxClient.
  */
-@Module({})
+@Module({
+  imports: [TypeOrmModule.forFeature([Mailbox, MailboxAccess])],
+  controllers: [MailboxesController, MeMailboxesController],
+  providers: [MailboxesService, MailboxAccessService, MailboxAccessGuard],
+  exports: [MailboxAccessService, MailboxAccessGuard],
+})
 export class MailboxesModule {}

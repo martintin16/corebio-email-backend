@@ -5,7 +5,7 @@ import { UserProfile } from './entities/user-profile.entity';
 
 /**
  * Fase 0: solo la lectura de perfiles que necesita el guard de autenticación.
- * Fase 1 suma el CRUD de admin (listar, invitar, permisos, desactivar, borrar).
+ * Fase 2 suma el CRUD de admin (listar, invitar, permisos, desactivar, borrar).
  */
 @Injectable()
 export class UsersService {
