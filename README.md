@@ -328,7 +328,10 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
   con la secret key; los tests usan un doble.
 - Validador `@IsMailboxAccessRecord()` para el campo `access`
   (`Record<uuid, { canSend: boolean, canRead: boolean }>`, sin campos de más).
-- `JwtAuthGuard`: un usuario `invited` pasa a `active` en su primer request.
+- Migración `ActivateProfileOnInviteAccepted`: trigger sobre `auth.users` que pasa el
+  perfil de `invited` a `active` cuando la persona acepta la invitación, más backfill.
+- `JwtAuthGuard`: además, un usuario `invited` pasa a `active` en su primer request
+  (red de seguridad).
 - `MailboxAccessService.validateInput()` y `MailboxesService` exportado (Fase 1).
 - Variables nuevas: `SUPABASE_SERVICE_ROLE_KEY` y `FRONTEND_URL`.
 - Tests unitarios (servicio, cliente de Supabase, validador, DTOs, guard) y e2e.
@@ -349,6 +352,13 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
 - **Desactivar = `status = inactive` + ban en Supabase Auth.** El guard lo bloquea en
   el próximo request; el ban impide además loguearse y renovar el token. Si el ban
   falla responde 502 y se puede reintentar (es idempotente).
+- **`invited → active` lo decide la base, no el frontend.** Aceptar la invitación
+  (validar el link) hace que Supabase complete `email_confirmed_at` y `last_sign_in_at`
+  en `auth.users`; un trigger lo detecta y activa el perfil en ese momento. La primera
+  versión lo hacía solo en el guard, al primer request al backend: en la verificación
+  el usuario quedó `invited` porque `/reset-password` no llama al backend (y en general
+  alguien puede aceptar y no volver a entrar en días). El trigger solo toca perfiles
+  `invited`: un usuario desactivado no se reactiva por iniciar sesión.
 - **Reenviar invitación solo si está `invited`** (si no, 409). Si Supabase no permite
   reenviar la invitación, se manda el email de "elegir contraseña" (plantilla Reset
   password), que lleva a la misma pantalla.
@@ -359,12 +369,15 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
   de producto.
 
 **Verificación**
-- ⚠️ Esta fase suma la dependencia `@supabase/supabase-js`: correr **`npm install`** (no
-  `npm ci`) para actualizar `package-lock.json`, y commitearlo.
-- A verificar en local: `build`, `lint`, `test`, `test:e2e`.
-- A verificar contra Supabase: invitar a un email de prueba desde `POST /users`, aceptar
-  en incógnito, ver que pasa a `active`; editar permisos; reenviar invitación;
-  desactivar (no puede loguearse); borrar.
+- ✅ Dependencia `@supabase/supabase-js` instalada y `package-lock.json` commiteado.
+- ✅ En local: `build`, `test` (130) y `test:e2e` (62) pasan. `lint` marcó un cast
+  innecesario en `users.service.spec.ts`, corregido.
+- ✅ Contra Supabase: alta con invitación (201), 409 por email duplicado y por
+  autoedición/autodesactivación, 400 con `access` inválido, `GET /mailboxes/:id/access`,
+  `resend-invite` (llega el mail con el link a `/reset-password`), edición de permisos,
+  desactivar bloquea el login, borrar → 204.
+- ❌→ corregido: después de aceptar la invitación el usuario seguía `invited` (ver
+  decisión del trigger). A verificar de nuevo tras `migration:run`.
 
 ### ⏳ Pendiente
 

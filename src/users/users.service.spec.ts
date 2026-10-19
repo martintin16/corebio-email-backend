@@ -9,7 +9,7 @@ import type { DataSource, EntityManager, Repository } from 'typeorm';
 import type { MailboxAccessService } from '../mailboxes/mailbox-access.service';
 import type { MailboxesService } from '../mailboxes/mailboxes.service';
 import { UserProfile } from './entities/user-profile.entity';
-import { EmailAlreadyRegisteredError, type SupabaseAdminClient } from './supabase-admin.client';
+import { EmailAlreadyRegisteredError } from './supabase-admin.client';
 import { UsersService } from './users.service';
 
 const ADMIN = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -101,7 +101,7 @@ describe('UsersService', () => {
       dataSource as unknown as DataSource,
       mailboxAccess as unknown as MailboxAccessService,
       mailboxes as unknown as MailboxesService,
-      supabase as unknown as SupabaseAdminClient,
+      supabase,
       new ConfigService({ FRONTEND_URL: 'https://front.test/' }),
     );
   });
