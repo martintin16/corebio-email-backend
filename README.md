@@ -69,6 +69,8 @@ Local Storage / cookies de Supabase → `access_token`).
 | `DATABASE_SSL_CA` | No | Certificado CA de Supabase (PEM). Si está, se valida el certificado del servidor. |
 | `SUPABASE_URL` | Sí | `https://etwiwzuwwnzijdxjbfqx.supabase.co` |
 | `SUPABASE_JWT_AUDIENCE` | No (`authenticated`) | Audience esperada en los JWT. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Sí | Secret key (`sb_secret_...`) o la legacy `service_role` (Project Settings → API Keys). Invita, banea y borra usuarios. **Solo en el backend.** |
+| `FRONTEND_URL` | Sí | Base del front. Los links de invitación vuelven a `<FRONTEND_URL>/reset-password`. |
 | `CORS_ORIGINS` | Sí | Orígenes permitidos separados por coma. |
 | `PORT` | No (`4000`) | Railway lo inyecta solo. |
 | `NODE_ENV` | No | `development` / `production` / `test`. |
@@ -107,7 +109,7 @@ src/
   auth/                   JWT de Supabase, guards globales, decorators, GET /me
   health/                 GET /health (Railway)
   common/                 helpers transversales (errores de Postgres, transforms de DTOs)
-  users/                  user_profiles (Fase 0: entidad + lectura; Fase 2: CRUD)
+  users/                  user_profiles, gestión de usuarios e invitaciones (Fases 0 y 2)
   mailboxes/              casillas, permisos por casilla, @RequireMailboxAccess (Fase 1)
   messages/               Fase 4 (módulo vacío)
   scheduled-messages/     Fase 5 (módulo vacío)
@@ -130,7 +132,8 @@ Todo endpoint requiere token **por defecto**. Hay dos guards globales, en este o
      expiración. El backend no guarda ningún secreto para esto, y la key legacy
      HS256 no se acepta.
    - Carga el perfil del usuario desde `user_profiles`. Sin perfil o con
-     `status = inactive` → **403**.
+     `status = inactive` → **403**. Si está `invited`, pasa a `active` (primer
+     request después de aceptar la invitación).
    - Deja `request.user = { id, email, role }`.
 2. **`RolesGuard`**: si el endpoint tiene `@Roles('admin')`, exige ese rol.
 
@@ -163,6 +166,13 @@ Códigos de respuesta:
 | `DELETE /mailboxes/:id` | admin | 1 | Desconecta (borra casilla y accesos) → 204 |
 | `POST /mailboxes/:id/reconnect` | admin | 1 | **501** hasta la Fase 3 (OAuth de Google) |
 | `GET /me/mailboxes` | logueado | 1 | `Mailbox[]` a las que el usuario tiene algún permiso |
+| `GET /users` | admin | 2 | `AdminUser[]` |
+| `POST /users` | admin | 2 | `{ name, email, role, access }` → invita y devuelve `AdminUser` (201; 409 si el email existe) |
+| `PATCH /users/:id/permissions` | admin | 2 | `{ role, access }` (reemplaza todos los permisos) → `AdminUser` |
+| `PATCH /users/:id/deactivate` | admin | 2 | Desactiva y banea en Supabase Auth → `AdminUser` |
+| `DELETE /users/:id` | admin | 2 | Borra de Supabase Auth (perfil y permisos en cascada) → 204 |
+| `POST /users/:id/resend-invite` | admin | 2 | Reenvía la invitación (solo `invited`; si no, 409) → 204 |
+| `GET /mailboxes/:id/access` | admin | 2 | `{ user: AdminUser, access }[]` de esa casilla |
 
 Los tipos de respuesta son los mismos que usa el frontend (`lib/types/*.ts`).
 
@@ -172,21 +182,25 @@ Los tipos de respuesta son los mismos que usa el frontend (`lib/types/*.ts`).
 
 Tareas de configuración (no de código) antes de presentarlo a Corebio:
 
-- [ ] **SMTP propio en Supabase** (Authentication → Emails → SMTP Settings).
+- [x] **SMTP propio en Supabase** (Authentication → Emails → SMTP Settings) — para
+  pruebas, configurado con un Gmail personal.
   - El SMTP incluido en Supabase solo envía a miembros del equipo del proyecto y con
     un límite muy bajo por hora: no sirve para invitar a otras personas.
-  - Para pruebas (Fase 2): Brevo con un remitente verificado (un Gmail propio), sin DNS.
-  - Para Corebio: remitente `@corebio.org` con SPF/DKIM en el DNS de `corebio.org`
+  - [ ] Para Corebio: remitente `@corebio.org` con SPF/DKIM en el DNS de `corebio.org`
     (lo configura la gente de IT de Corebio).
-- [ ] **Redirect URLs** (Authentication → URL Configuration): incluir
-  `http://localhost:3000/reset-password` y
-  `https://corebio-email-collection.vercel.app/reset-password`.
-- [ ] **Plantillas de email** (Authentication → Emails → Templates), para que los links
-  funcionen con el flujo PKCE del frontend y desde cualquier dispositivo:
+- [x] **URL Configuration** (Authentication → URL Configuration):
+  - Site URL: `https://corebio-email-collection.vercel.app` (sin barra final).
+  - Redirect URLs: `http://localhost:3000/reset-password` y
+    `https://corebio-email-collection.vercel.app/reset-password`.
+- [x] **Plantillas de email** (Authentication → Emails → Templates). El link de cada una:
   - Invite user: `{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=invite`
   - Reset password: `{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=recovery`
-  - Requiere el cambio del frontend en `/reset-password` (rama
-    `fix/invite-link-token-hash` del repo del front).
+  - Con `token_hash` el link funciona con el flujo PKCE del frontend y desde cualquier
+    dispositivo (lo valida `/reset-password` con `verifyOtp`). Verificado: invitación y
+    "olvidé mi contraseña" de punta a punta.
+  - **Las invitaciones se mandan desde la app, no desde el dashboard de Supabase**: el
+    dashboard no indica destino, `{{ .RedirectTo }}` cae en la Site URL y el link llega
+    sin `/reset-password`. El backend siempre manda `<FRONTEND_URL>/reset-password`.
 - [ ] **Deploy en Railway** (ver arriba) y agregar la URL del backend al frontend.
 
 ---
@@ -302,15 +316,58 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
   UUID); 404; 501 en reconnect; `GET /me/mailboxes` devuelve `[]` para un admin sin
   accesos asignados.
 
+### ✅ Fase 2 — Users
+
+**Qué se construyó**
+- Endpoints de admin: `GET/POST /users`, `PATCH /users/:id/permissions`,
+  `PATCH /users/:id/deactivate`, `DELETE /users/:id`, `POST /users/:id/resend-invite` y
+  `GET /mailboxes/:id/access`, con los tipos exactos del frontend (`AdminUser`,
+  `{ user, access }[]`).
+- `SupabaseAdminClient`: interfaz propia sobre la Admin API de Supabase (invitar,
+  reenviar, sincronizar rol, banear, borrar). La implementación usa `@supabase/supabase-js`
+  con la secret key; los tests usan un doble.
+- Validador `@IsMailboxAccessRecord()` para el campo `access`
+  (`Record<uuid, { canSend: boolean, canRead: boolean }>`, sin campos de más).
+- `JwtAuthGuard`: un usuario `invited` pasa a `active` en su primer request.
+- `MailboxAccessService.validateInput()` y `MailboxesService` exportado (Fase 1).
+- Variables nuevas: `SUPABASE_SERVICE_ROLE_KEY` y `FRONTEND_URL`.
+- Tests unitarios (servicio, cliente de Supabase, validador, DTOs, guard) y e2e.
+
+**Decisiones**
+- **Alta en orden "validar → invitar → guardar".** Antes de mandar el email se valida el
+  `access` (ids y casillas existentes) y que el email no tenga cuenta en `auth.users`
+  (409). Después: invitación (Supabase crea el usuario y el trigger de la Fase 0 el
+  perfil), y en una transacción nombre/rol/estado + permisos, y por último
+  `app_metadata.role`. Si algo de eso falla, se borra el usuario de Auth: no quedan
+  cuentas a medias (el email ya enviado queda con un link que no sirve).
+- **`app_metadata.role` es solo una ayuda para la UI.** La autorización lee
+  `user_profiles`. Al editar permisos, si sincronizar `app_metadata` falla se loguea y
+  el pedido no falla. En el alta sí se deshace, para no arrancar desincronizado.
+- **Un admin no puede quitarse el rol, desactivarse ni borrarse a sí mismo.** Como quien
+  hace el pedido es siempre un admin activo, esa sola regla garantiza que nunca se quede
+  el sistema sin administradores (no hace falta contar admins ni bloquear filas).
+- **Desactivar = `status = inactive` + ban en Supabase Auth.** El guard lo bloquea en
+  el próximo request; el ban impide además loguearse y renovar el token. Si el ban
+  falla responde 502 y se puede reintentar (es idempotente).
+- **Reenviar invitación solo si está `invited`** (si no, 409). Si Supabase no permite
+  reenviar la invitación, se manda el email de "elegir contraseña" (plantilla Reset
+  password), que lleva a la misma pantalla.
+- **Errores de Supabase Auth → 502** con un mensaje genérico; el detalle va al log.
+- **No se exige un mínimo de casillas por usuario** (el frontend deja la decisión al
+  backend; un admin puede no tener ninguna).
+- **Sin endpoint para reactivar usuarios**: el frontend no tiene esa acción. Pendiente
+  de producto.
+
+**Verificación**
+- ⚠️ Esta fase suma la dependencia `@supabase/supabase-js`: correr **`npm install`** (no
+  `npm ci`) para actualizar `package-lock.json`, y commitearlo.
+- A verificar en local: `build`, `lint`, `test`, `test:e2e`.
+- A verificar contra Supabase: invitar a un email de prueba desde `POST /users`, aceptar
+  en incógnito, ver que pasa a `active`; editar permisos; reenviar invitación;
+  desactivar (no puede loguearse); borrar.
+
 ### ⏳ Pendiente
 
-- **Fase 2 — Users:**
-  - CRUD de admin + `GET /mailboxes/:id/access`.
-  - Invitación vía Supabase Admin API (requiere `SUPABASE_SERVICE_ROLE_KEY`), con
-    `redirectTo` a `<FRONTEND_URL>/reset-password`.
-  - Sincronizar `app_metadata.role`; transición `invited → active`; ban en Supabase al
-    desactivar; reglas de "no quedarse sin admins".
-  - Antes de probar invitaciones: SMTP de pruebas (ver checklist).
 - **Fase 3 — Google:**
   - OAuth por casilla, con `refresh_token` encriptado (AES-256-GCM).
   - Interfaz `GoogleMailboxClient.forMailbox(mailboxId)`, que elige la implementación

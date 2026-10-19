@@ -46,7 +46,7 @@ describe('extractBearerToken', () => {
 describe('JwtAuthGuard', () => {
   let reflector: { getAllAndOverride: jest.Mock };
   let verifier: { verify: jest.Mock };
-  let users: { findProfileById: jest.Mock };
+  let users: { findProfileById: jest.Mock; markActive: jest.Mock };
   let guard: JwtAuthGuard;
 
   beforeEach(() => {
@@ -54,7 +54,10 @@ describe('JwtAuthGuard', () => {
     verifier = {
       verify: jest.fn().mockResolvedValue({ sub: USER_ID, email: 'ana@example.org' }),
     };
-    users = { findProfileById: jest.fn().mockResolvedValue(buildProfile()) };
+    users = {
+      findProfileById: jest.fn().mockResolvedValue(buildProfile()),
+      markActive: jest.fn().mockResolvedValue(undefined),
+    };
     guard = new JwtAuthGuard(
       reflector as unknown as Reflector,
       verifier as unknown as SupabaseJwtVerifier,
@@ -98,10 +101,17 @@ describe('JwtAuthGuard', () => {
     await expect(guard.canActivate(ctx)).rejects.toBeInstanceOf(ForbiddenException);
   });
 
-  it('deja pasar a un usuario invitado (ya tiene sesión válida)', async () => {
+  it('deja pasar a un usuario invitado y lo pasa a active', async () => {
     users.findProfileById.mockResolvedValue(buildProfile({ status: 'invited' }));
     const ctx = buildContext({ headers: { authorization: 'Bearer ok' } });
     await expect(guard.canActivate(ctx)).resolves.toBe(true);
+    expect(users.markActive).toHaveBeenCalledWith(USER_ID);
+  });
+
+  it('no toca el estado de un usuario que ya está activo', async () => {
+    const ctx = buildContext({ headers: { authorization: 'Bearer ok' } });
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
+    expect(users.markActive).not.toHaveBeenCalled();
   });
 
   it('carga request.user con el rol de la DB, no del token', async () => {

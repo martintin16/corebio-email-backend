@@ -3,6 +3,8 @@ import { envValidationSchema } from './env.validation';
 const valid = {
   DATABASE_URL: 'postgresql://postgres:p@ss#word@db.ref.supabase.co:5432/postgres',
   SUPABASE_URL: 'https://ref.supabase.co',
+  SUPABASE_SERVICE_ROLE_KEY: 'sb_secret_test',
+  FRONTEND_URL: 'http://localhost:3000',
   CORS_ORIGINS: 'http://localhost:3000',
 };
 
@@ -18,7 +20,13 @@ describe('envValidationSchema', () => {
     });
   });
 
-  it.each(['DATABASE_URL', 'SUPABASE_URL', 'CORS_ORIGINS'])('exige %s', (key) => {
+  it.each([
+    'DATABASE_URL',
+    'SUPABASE_URL',
+    'SUPABASE_SERVICE_ROLE_KEY',
+    'FRONTEND_URL',
+    'CORS_ORIGINS',
+  ])('exige %s', (key) => {
     const env: Record<string, string> = { ...valid };
     delete env[key];
     expect(envValidationSchema.validate(env).error).toBeDefined();

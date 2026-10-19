@@ -10,7 +10,7 @@ const MBX_B = '22222222-2222-4222-8222-222222222222';
 describe('MailboxAccessService', () => {
   let repo: { findOneBy: jest.Mock; query: jest.Mock; find: jest.Mock };
   let em: { find: jest.Mock; delete: jest.Mock; insert: jest.Mock };
-  let dataSource: { transaction: jest.Mock };
+  let dataSource: { transaction: jest.Mock; manager: unknown };
   let service: MailboxAccessService;
 
   beforeEach(() => {
@@ -24,6 +24,7 @@ describe('MailboxAccessService', () => {
       transaction: jest.fn((run: (manager: EntityManager) => Promise<void>) =>
         run(em as unknown as EntityManager),
       ),
+      manager: em,
     };
     service = new MailboxAccessService(
       repo as unknown as Repository<MailboxAccess>,
@@ -136,6 +137,34 @@ describe('MailboxAccessService', () => {
       );
       expect(dataSource.transaction).not.toHaveBeenCalled();
       expect(em.insert).toHaveBeenCalled();
+    });
+  });
+
+  describe('validateInput', () => {
+    it('acepta casillas existentes sin escribir nada', async () => {
+      await service.validateInput({ [MBX_A]: { canSend: true, canRead: true } });
+      expect(em.delete).not.toHaveBeenCalled();
+      expect(em.insert).not.toHaveBeenCalled();
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('400 con un id que no es uuid', async () => {
+      await expect(
+        service.validateInput({ mbx_1: { canSend: true, canRead: true } }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(em.find).not.toHaveBeenCalled();
+    });
+
+    it('400 con una casilla inexistente', async () => {
+      em.find.mockResolvedValue([]);
+      await expect(
+        service.validateInput({ [MBX_A]: { canSend: true, canRead: true } }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('{} es válido sin consultar la base', async () => {
+      await service.validateInput({});
+      expect(em.find).not.toHaveBeenCalled();
     });
   });
 });

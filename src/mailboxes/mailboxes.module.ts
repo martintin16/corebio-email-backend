@@ -16,6 +16,8 @@ import { MailboxesService } from './mailboxes.service';
   imports: [TypeOrmModule.forFeature([Mailbox, MailboxAccess])],
   controllers: [MailboxesController, MeMailboxesController],
   providers: [MailboxesService, MailboxAccessService, MailboxAccessGuard],
-  exports: [MailboxAccessService, MailboxAccessGuard],
+  // MailboxesService se exporta para que Users (GET /mailboxes/:id/access) responda 404
+  // con la misma regla que el resto de los endpoints de casillas.
+  exports: [MailboxesService, MailboxAccessService, MailboxAccessGuard],
 })
 export class MailboxesModule {}

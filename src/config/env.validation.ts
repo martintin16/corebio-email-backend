@@ -20,6 +20,13 @@ export const envValidationSchema = Joi.object({
     .uri({ scheme: ['https', 'http'] })
     .required(),
   SUPABASE_JWT_AUDIENCE: Joi.string().default('authenticated'),
+  // Secret key (sb_secret_...) o la legacy service_role: invitar, banear y borrar usuarios.
+  SUPABASE_SERVICE_ROLE_KEY: Joi.string().required(),
+
+  // Base del frontend: los links de invitación vuelven a `<FRONTEND_URL>/reset-password`.
+  FRONTEND_URL: Joi.string()
+    .uri({ scheme: ['https', 'http'] })
+    .required(),
 
   CORS_ORIGINS: Joi.string().required(),
 });

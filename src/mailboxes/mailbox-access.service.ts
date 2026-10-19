@@ -98,11 +98,7 @@ export class MailboxAccessService {
     input: MailboxAccessInput,
     manager?: EntityManager,
   ): Promise<void> {
-    const mailboxIds = Object.keys(input);
-    const invalid = mailboxIds.filter((id) => !isUUID(id));
-    if (invalid.length > 0) {
-      throw new BadRequestException(`Ids de casilla inválidos: ${invalid.join(', ')}`);
-    }
+    assertUuidKeys(input);
 
     const granted = Object.entries(input)
       .filter(([, flags]) => flags.canSend || flags.canRead)
@@ -114,18 +110,7 @@ export class MailboxAccessService {
       }));
 
     const run = async (em: EntityManager): Promise<void> => {
-      if (mailboxIds.length > 0) {
-        const existing = await em.find(Mailbox, {
-          select: { id: true },
-          where: { id: In(mailboxIds) },
-        });
-        const existingIds = new Set(existing.map((m) => m.id));
-        const unknown = mailboxIds.filter((id) => !existingIds.has(id));
-        if (unknown.length > 0) {
-          throw new BadRequestException(`Casillas inexistentes: ${unknown.join(', ')}`);
-        }
-      }
-
+      await this.assertMailboxesExist(Object.keys(input), em);
       await em.delete(MailboxAccess, { userId });
       if (granted.length > 0) {
         await em.insert(MailboxAccess, granted);
@@ -134,5 +119,34 @@ export class MailboxAccessService {
 
     if (manager) return run(manager);
     return this.dataSource.transaction(run);
+  }
+
+  /**
+   * Valida un `access` sin escribir nada: ids con formato uuid y casillas que
+   * existen. Lo usa Users para rechazar el alta ANTES de mandar la invitación.
+   */
+  async validateInput(input: MailboxAccessInput): Promise<void> {
+    assertUuidKeys(input);
+    await this.assertMailboxesExist(Object.keys(input), this.dataSource.manager);
+  }
+
+  private async assertMailboxesExist(mailboxIds: string[], em: EntityManager): Promise<void> {
+    if (mailboxIds.length === 0) return;
+    const existing = await em.find(Mailbox, {
+      select: { id: true },
+      where: { id: In(mailboxIds) },
+    });
+    const existingIds = new Set(existing.map((m) => m.id));
+    const unknown = mailboxIds.filter((id) => !existingIds.has(id));
+    if (unknown.length > 0) {
+      throw new BadRequestException(`Casillas inexistentes: ${unknown.join(', ')}`);
+    }
+  }
+}
+
+function assertUuidKeys(input: MailboxAccessInput): void {
+  const invalid = Object.keys(input).filter((id) => !isUUID(id));
+  if (invalid.length > 0) {
+    throw new BadRequestException(`Ids de casilla inválidos: ${invalid.join(', ')}`);
   }
 }

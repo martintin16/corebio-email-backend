@@ -24,6 +24,7 @@ const ADMIN_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const USER_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const INACTIVE_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const NO_PROFILE_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+const INVITED_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
 
 /** Endpoints de prueba para ejercitar los guards de punta a punta. */
 @Controller('probe')
@@ -57,7 +58,10 @@ const profiles = new Map<string, UserProfile>([
   [ADMIN_ID, profile(ADMIN_ID, { role: 'admin' })],
   [USER_ID, profile(USER_ID)],
   [INACTIVE_ID, profile(INACTIVE_ID, { status: 'inactive' })],
+  [INVITED_ID, profile(INVITED_ID, { status: 'invited' })],
 ]);
+
+const markActive = jest.fn(() => Promise.resolve());
 
 describe('Auth (e2e)', () => {
   let app: INestApplication;
@@ -82,7 +86,10 @@ describe('Auth (e2e)', () => {
         SupabaseJwtVerifier,
         {
           provide: UsersService,
-          useValue: { findProfileById: (id: string) => Promise.resolve(profiles.get(id) ?? null) },
+          useValue: {
+            findProfileById: (id: string) => Promise.resolve(profiles.get(id) ?? null),
+            markActive,
+          },
         },
         { provide: APP_GUARD, useClass: JwtAuthGuard },
         { provide: APP_GUARD, useClass: RolesGuard },
@@ -132,6 +139,14 @@ describe('Auth (e2e)', () => {
       .get('/me')
       .set('Authorization', `Bearer ${await tokenFor(INACTIVE_ID)}`)
       .expect(403);
+  });
+
+  it('usuario invitado con sesión válida → 200 y pasa a active', async () => {
+    await request(app.getHttpServer())
+      .get('/me')
+      .set('Authorization', `Bearer ${await tokenFor(INVITED_ID)}`)
+      .expect(200);
+    expect(markActive).toHaveBeenCalledWith(INVITED_ID);
   });
 
   it('endpoint de admin con rol user → 403', async () => {

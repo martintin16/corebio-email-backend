@@ -29,6 +29,7 @@ export function extractBearerToken(header: string | undefined): string | null {
  * 3. Carga el perfil de `user_profiles` → rol y estado. Sin perfil o inactivo → 403.
  *    El rol sale de la DB y no del JWT, para que desactivar a alguien o cambiarle
  *    el rol tenga efecto inmediato, sin esperar a que venza su token.
+ *    Si el perfil está `invited`, pasa a `active` (primer request tras aceptar la invitación).
  * 4. Deja `request.user = { id, email, role }` para el RolesGuard y @CurrentUser().
  */
 @Injectable()
@@ -60,6 +61,11 @@ export class JwtAuthGuard implements CanActivate {
     }
     if (profile.status === 'inactive') {
       throw new ForbiddenException('El usuario está desactivado');
+    }
+    if (profile.status === 'invited') {
+      // Tener una sesión válida implica que aceptó la invitación (definió su
+      // contraseña desde el link): a partir de acá pasa a `active`.
+      await this.users.markActive(profile.id);
     }
 
     request.user = { id: profile.id, email: claims.email, role: profile.role };

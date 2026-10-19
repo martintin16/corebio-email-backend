@@ -24,7 +24,7 @@ describe('Health (e2e)', () => {
         // El guard global real: /health tiene que pasar sin token por ser @Public().
         { provide: APP_GUARD, useClass: JwtAuthGuard },
         { provide: SupabaseJwtVerifier, useValue: { verify: jest.fn() } },
-        { provide: UsersService, useValue: { findProfileById: jest.fn() } },
+        { provide: UsersService, useValue: { findProfileById: jest.fn(), markActive: jest.fn() } },
       ],
     })
       .overrideProvider(TypeOrmHealthIndicator)

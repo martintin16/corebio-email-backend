@@ -38,10 +38,13 @@ export interface TestApp {
  * - JWKS: claves ES256 generadas para el test.
  * - Perfiles: un admin (ADMIN_ID) y un user (USER_ID), activos.
  * Los controllers y providers del módulo bajo prueba se pasan por parámetro.
+ * `usersService` suma métodos al UsersService simulado (para probar UsersController
+ * sin pisar el `findProfileById` que usa el guard).
  */
 export async function createTestApp(options: {
   controllers: Type<unknown>[];
   providers?: Provider[];
+  usersService?: Record<string, unknown>;
 }): Promise<TestApp> {
   const keys = await createTestKeys();
   const profiles = new Map<string, UserProfile>([
@@ -62,7 +65,11 @@ export async function createTestApp(options: {
       SupabaseJwtVerifier,
       {
         provide: UsersService,
-        useValue: { findProfileById: (id: string) => Promise.resolve(profiles.get(id) ?? null) },
+        useValue: {
+          ...options.usersService,
+          findProfileById: (id: string) => Promise.resolve(profiles.get(id) ?? null),
+          markActive: () => Promise.resolve(),
+        },
       },
       { provide: APP_GUARD, useClass: JwtAuthGuard },
       { provide: APP_GUARD, useClass: RolesGuard },
