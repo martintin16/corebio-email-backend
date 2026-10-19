@@ -376,8 +376,13 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
   autoedición/autodesactivación, 400 con `access` inválido, `GET /mailboxes/:id/access`,
   `resend-invite` (llega el mail con el link a `/reset-password`), edición de permisos,
   desactivar bloquea el login, borrar → 204.
-- ❌→ corregido: después de aceptar la invitación el usuario seguía `invited` (ver
-  decisión del trigger). A verificar de nuevo tras `migration:run`.
+- ✅ Corregido y verificado: en la primera prueba el usuario seguía `invited` después de
+  aceptar la invitación (ver decisión del trigger). Con `65634e6` y la migración
+  `ActivateProfileOnInviteAccepted` aplicada: invitar → aceptar en incógnito desde el
+  front, sin ningún request al backend con ese usuario → `GET /users` lo muestra
+  `active`. Un usuario desactivado no puede loguearse y sigue `inactive`.
+- ⏳ El backfill de la migración no se probó (no quedaban usuarios aceptados en
+  `invited`); es un `UPDATE` simple con la misma condición que el trigger.
 
 ### ⏳ Pendiente
 
