@@ -1,16 +1,14 @@
-import {
-  ConflictException,
-  Controller,
-  Get,
-  NotFoundException,
-  NotImplementedException,
-  Post,
-} from '@nestjs/common';
+import { ConflictException, Controller, Get, NotFoundException, Post } from '@nestjs/common';
 import request from 'supertest';
 import { RequireMailboxAccess } from '../src/mailboxes/decorators/require-mailbox-access.decorator';
 import { MailboxAccessGuard } from '../src/mailboxes/guards/mailbox-access.guard';
 import { MailboxAccessService } from '../src/mailboxes/mailbox-access.service';
-import { MailboxesController, MeMailboxesController } from '../src/mailboxes/mailboxes.controller';
+import { MailboxConnectionService } from '../src/mailboxes/mailbox-connection.service';
+import {
+  MailboxesController,
+  MailboxOAuthController,
+  MeMailboxesController,
+} from '../src/mailboxes/mailboxes.controller';
 import { MailboxesService } from '../src/mailboxes/mailboxes.service';
 import type { AdminMailbox } from '../src/mailboxes/mailboxes.types';
 import { ADMIN_ID, createTestApp, type TestApp, USER_ID } from './utils/test-app';
@@ -48,9 +46,12 @@ describe('Mailboxes (e2e)', () => {
     listForAdmin: jest.fn(),
     create: jest.fn(),
     update: jest.fn(),
-    remove: jest.fn(),
-    reconnect: jest.fn(),
     listForUser: jest.fn(),
+  };
+  const connection = {
+    startConnection: jest.fn(),
+    handleCallback: jest.fn(),
+    disconnect: jest.fn(),
   };
   // USER_ID puede leer MAILBOX_ID pero no enviar; no tiene nada sobre OTHER_MAILBOX_ID.
   const accessService = {
@@ -61,9 +62,15 @@ describe('Mailboxes (e2e)', () => {
 
   beforeAll(async () => {
     t = await createTestApp({
-      controllers: [MailboxesController, MeMailboxesController, MailboxProbeController],
+      controllers: [
+        MailboxesController,
+        MailboxOAuthController,
+        MeMailboxesController,
+        MailboxProbeController,
+      ],
       providers: [
         { provide: MailboxesService, useValue: service },
+        { provide: MailboxConnectionService, useValue: connection },
         { provide: MailboxAccessService, useValue: accessService },
         MailboxAccessGuard,
       ],
@@ -166,29 +173,68 @@ describe('Mailboxes (e2e)', () => {
       expect(service.update).not.toHaveBeenCalled();
     });
 
-    it('DELETE /mailboxes/:id → 204', async () => {
-      service.remove.mockResolvedValue(undefined);
+    it('DELETE /mailboxes/:id desconecta (revoca y borra) → 204', async () => {
+      connection.disconnect.mockResolvedValue(undefined);
       await http()
         .delete(`/mailboxes/${MAILBOX_ID}`)
         .set('Authorization', await t.authHeader(ADMIN_ID))
         .expect(204);
-      expect(service.remove).toHaveBeenCalledWith(MAILBOX_ID);
+      expect(connection.disconnect).toHaveBeenCalledWith(MAILBOX_ID);
     });
 
     it('DELETE de una casilla inexistente → 404', async () => {
-      service.remove.mockRejectedValue(new NotFoundException());
+      connection.disconnect.mockRejectedValue(new NotFoundException());
       await http()
         .delete(`/mailboxes/${MAILBOX_ID}`)
         .set('Authorization', await t.authHeader(ADMIN_ID))
         .expect(404);
     });
 
-    it('POST /mailboxes/:id/reconnect → 501 hasta la Fase 3', async () => {
-      service.reconnect.mockRejectedValue(new NotImplementedException());
-      await http()
+    it('POST /mailboxes/:id/reconnect → 200 con { authUrl } para el admin que lo pide', async () => {
+      connection.startConnection.mockResolvedValue({ authUrl: 'https://accounts.google.com/x' });
+      const res = await http()
         .post(`/mailboxes/${MAILBOX_ID}/reconnect`)
         .set('Authorization', await t.authHeader(ADMIN_ID))
-        .expect(501);
+        .expect(200);
+      expect(res.body).toEqual({ authUrl: 'https://accounts.google.com/x' });
+      expect(connection.startConnection).toHaveBeenCalledWith(MAILBOX_ID, ADMIN_ID);
+    });
+
+    it('POST /mailboxes/:id/reconnect como user → 403', async () => {
+      await http()
+        .post(`/mailboxes/${MAILBOX_ID}/reconnect`)
+        .set('Authorization', await t.authHeader(USER_ID))
+        .expect(403);
+      expect(connection.startConnection).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /mailboxes/oauth/callback', () => {
+    it('es público y redirige a donde diga el servicio', async () => {
+      connection.handleCallback.mockResolvedValue(
+        'http://localhost:3000/admin/mailboxes?connected=abc',
+      );
+      const res = await http()
+        .get('/mailboxes/oauth/callback?code=c1&state=s1&scope=x&authuser=0')
+        .expect(302);
+      expect(res.headers.location).toBe('http://localhost:3000/admin/mailboxes?connected=abc');
+      expect(connection.handleCallback).toHaveBeenCalledWith({
+        code: 'c1',
+        state: 's1',
+        error: undefined,
+      });
+    });
+
+    it('pasa el error de Google (ej. el usuario canceló)', async () => {
+      connection.handleCallback.mockResolvedValue(
+        'http://localhost:3000/admin/mailboxes?connectionError=access_denied',
+      );
+      await http().get('/mailboxes/oauth/callback?error=access_denied').expect(302);
+      expect(connection.handleCallback).toHaveBeenCalledWith({
+        code: undefined,
+        state: undefined,
+        error: 'access_denied',
+      });
     });
   });
 

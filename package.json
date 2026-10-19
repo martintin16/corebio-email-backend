@@ -37,6 +37,7 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "dotenv": "^16.4.5",
+    "googleapis": "^144.0.0",
     "helmet": "^8.0.0",
     "joi": "^17.13.3",
     "jose": "^5.9.6",

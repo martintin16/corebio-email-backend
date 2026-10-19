@@ -1,9 +1,4 @@
-import {
-  ConflictException,
-  Injectable,
-  NotFoundException,
-  NotImplementedException,
-} from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { isUniqueViolation } from '../common/postgres-errors';
@@ -105,23 +100,6 @@ export class MailboxesService {
     return this.findForAdmin(id);
   }
 
-  /**
-   * "Desconectar" = borrar la casilla y, en cascada, todos sus accesos.
-   * En la Fase 3 se suma revocar el token de Google antes de borrar.
-   */
-  async remove(id: string): Promise<void> {
-    const result = await this.mailboxes.delete({ id });
-    if (!result.affected) throw new NotFoundException('La casilla no existe');
-  }
-
-  /** Placeholder hasta la Fase 3 (OAuth de Google). */
-  async reconnect(id: string): Promise<never> {
-    await this.assertExists(id);
-    throw new NotImplementedException(
-      'La reconexión con Google todavía no está disponible (Fase 3)',
-    );
-  }
-
   /** Casillas a las que el usuario tiene algún permiso (GET /me/mailboxes). */
   async listForUser(userId: string): Promise<UserMailbox[]> {
     const rows: { id: string; email: string; display_name: string }[] = await this.mailboxes.query(
@@ -135,10 +113,5 @@ export class MailboxesService {
       [userId],
     );
     return rows.map((row) => ({ id: row.id, email: row.email, displayName: row.display_name }));
-  }
-
-  private async assertExists(id: string): Promise<void> {
-    const exists = await this.mailboxes.exists({ where: { id } });
-    if (!exists) throw new NotFoundException('La casilla no existe');
   }
 }

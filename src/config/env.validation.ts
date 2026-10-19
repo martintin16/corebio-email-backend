@@ -29,4 +29,22 @@ export const envValidationSchema = Joi.object({
     .required(),
 
   CORS_ORIGINS: Joi.string().required(),
+
+  // --- Google OAuth (conexión de casillas) ---
+  GOOGLE_CLIENT_ID: Joi.string().required(),
+  GOOGLE_CLIENT_SECRET: Joi.string().required(),
+  // Tiene que coincidir carácter por carácter con la registrada en Google Cloud.
+  GOOGLE_OAUTH_REDIRECT_URI: Joi.string()
+    .uri({ scheme: ['https', 'http'] })
+    .required(),
+  // 32 bytes en base64: clave AES-256-GCM para encriptar los refresh_token.
+  // Si cambia, los tokens guardados quedan ilegibles y hay que reconectar las casillas.
+  GOOGLE_TOKEN_ENCRYPTION_KEY: Joi.string()
+    .required()
+    .custom((value: string, helpers) =>
+      Buffer.from(value, 'base64').length === 32 ? value : helpers.error('any.invalid'),
+    )
+    .messages({ 'any.invalid': '{{#label}} tiene que ser 32 bytes en base64' }),
+  // Firma el `state` del flujo OAuth (que nadie pueda falsificar una conexión).
+  OAUTH_STATE_SECRET: Joi.string().min(32).required(),
 });

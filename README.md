@@ -70,7 +70,12 @@ Local Storage / cookies de Supabase → `access_token`).
 | `SUPABASE_URL` | Sí | `https://etwiwzuwwnzijdxjbfqx.supabase.co` |
 | `SUPABASE_JWT_AUDIENCE` | No (`authenticated`) | Audience esperada en los JWT. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Sí | Secret key (`sb_secret_...`) o la legacy `service_role` (Project Settings → API Keys). Invita, banea y borra usuarios. **Solo en el backend.** |
-| `FRONTEND_URL` | Sí | Base del front. Los links de invitación vuelven a `<FRONTEND_URL>/reset-password`. |
+| `FRONTEND_URL` | Sí | Base del front. Los links de invitación vuelven a `<FRONTEND_URL>/reset-password`; el callback de Google redirige a `<FRONTEND_URL>/admin/mailboxes`. |
+| `GOOGLE_CLIENT_ID` | Sí | OAuth Client (Web application) de Google Cloud. |
+| `GOOGLE_CLIENT_SECRET` | Sí | Secret de ese client. |
+| `GOOGLE_OAUTH_REDIRECT_URI` | Sí | `http://localhost:4000/mailboxes/oauth/callback` en local. Idéntica a la registrada en el client. |
+| `GOOGLE_TOKEN_ENCRYPTION_KEY` | Sí | 32 bytes en base64. Encripta los refresh_token. **Si cambia, hay que reconectar todas las casillas.** |
+| `OAUTH_STATE_SECRET` | Sí | Mínimo 32 caracteres. Firma el `state` del flujo OAuth. |
 | `CORS_ORIGINS` | Sí | Orígenes permitidos separados por coma. |
 | `PORT` | No (`4000`) | Railway lo inyecta solo. |
 | `NODE_ENV` | No | `development` / `production` / `test`. |
@@ -109,6 +114,7 @@ src/
   auth/                   JWT de Supabase, guards globales, decorators, GET /me
   health/                 GET /health (Railway)
   common/                 helpers transversales (errores de Postgres, transforms de DTOs)
+  google/                 OAuth con Google, encriptación de tokens, GoogleMailboxClient (Fase 3)
   users/                  user_profiles, gestión de usuarios e invitaciones (Fases 0 y 2)
   mailboxes/              casillas, permisos por casilla, @RequireMailboxAccess (Fase 1)
   messages/               Fase 4 (módulo vacío)
@@ -163,8 +169,9 @@ Códigos de respuesta:
 | `GET /mailboxes` | admin | 1 | `AdminMailbox[]` |
 | `POST /mailboxes` | admin | 1 | Alta `{ email, displayName }` → `AdminMailbox` (409 si el email existe) |
 | `PATCH /mailboxes/:id` | admin | 1 | `{ displayName }` → `AdminMailbox` |
-| `DELETE /mailboxes/:id` | admin | 1 | Desconecta (borra casilla y accesos) → 204 |
-| `POST /mailboxes/:id/reconnect` | admin | 1 | **501** hasta la Fase 3 (OAuth de Google) |
+| `DELETE /mailboxes/:id` | admin | 1·3 | Desconecta: revoca el permiso en Google y borra casilla y accesos → 204 |
+| `POST /mailboxes/:id/reconnect` | admin | 3 | Primera conexión o reconexión con Google → `{ authUrl }` (llevar el navegador ahí) |
+| `GET /mailboxes/oauth/callback` | público | 3 | Vuelta de Google. Redirige a `<FRONTEND_URL>/admin/mailboxes?connected=<id>` o `?connectionError=<code>` |
 | `GET /me/mailboxes` | logueado | 1 | `Mailbox[]` a las que el usuario tiene algún permiso |
 | `GET /users` | admin | 2 | `AdminUser[]` |
 | `POST /users` | admin | 2 | `{ name, email, role, access }` → invita y devuelve `AdminUser` (201; 409 si el email existe) |
@@ -201,6 +208,14 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
   - **Las invitaciones se mandan desde la app, no desde el dashboard de Supabase**: el
     dashboard no indica destino, `{{ .RedirectTo }}` cae en la Site URL y el link llega
     sin `/reset-password`. El backend siempre manda `<FRONTEND_URL>/reset-password`.
+- [ ] **Google para producción** (lo configura Corebio en su Google Workspace):
+  - Proyecto de Google Cloud dentro de la organización de Corebio, con la pantalla de
+    consentimiento en **Internal**: no requiere verificación de Google y los
+    refresh_token no vencen. (En el proyecto de desarrollo, en modo *Testing*, vencen a
+    los 7 días y la casilla pasa a "reconectar".)
+  - Redirect URI de producción: `https://<backend>/mailboxes/oauth/callback`.
+  - Actualizar `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` y `GOOGLE_OAUTH_REDIRECT_URI`
+    y reconectar cada casilla una vez (los tokens son de cada client).
 - [ ] **Deploy en Railway** (ver arriba) y agregar la URL del backend al frontend.
 
 ---
@@ -384,13 +399,63 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
 - ⏳ El backfill de la migración no se probó (no quedaban usuarios aceptados en
   `invited`); es un `UPDATE` simple con la misma condición que el trigger.
 
+### ✅ Fase 3 — Conexión de casillas con Google (OAuth)
+
+**Qué se construyó**
+- Módulo `google/` (infraestructura, como `auth/`):
+  - `GoogleMailboxClient.forMailbox(mailboxId)` → `{ gmail, drive, email }` autenticados
+    como la casilla. Es lo único que van a usar las Fases 4–7. Elige la estrategia según
+    `authType`: `oauth` (refresh_token de la casilla) o `domain_wide` (placeholder → 501).
+  - `TokenCipher`: AES-256-GCM para los refresh_token.
+  - `OAuthStateService`: `state` firmado (JWT HS256, 10 min, casilla + admin).
+  - `GoogleOAuthClient`: interfaz propia sobre `googleapis` (URL de consentimiento,
+    canje del code, email de la cuenta, revocar).
+- `MailboxConnectionService`: flujo completo (inicio, callback, desconexión con revocación).
+- `POST /mailboxes/:id/reconnect` → `{ authUrl }` y `GET /mailboxes/oauth/callback`.
+- Migración `AddMailboxGoogleCredentials`: `google_refresh_token` (encriptado),
+  `google_scopes`, `connected_at`, `connected_by`.
+- Tests unitarios (cifrado, state, comparación de emails, cliente por casilla, flujo de
+  conexión) y e2e (reconnect, callback público, desconexión).
+
+**Decisiones**
+- **El refresh_token se encripta en la aplicación**, no en la base: un dump o un acceso
+  indebido a la tabla no alcanza para usar las casillas. La columna tiene `select: false`
+  para que nunca salga en una consulta, una respuesta o un log por accidente.
+- **Se verifica que la cuenta conectada sea la casilla** (email de Gmail = email de la
+  casilla). Si no, `tesoreria@` quedaría leyendo el correo de otra persona. En Gmail se
+  ignoran los puntos y `googlemail.com`.
+- **Se verifican los permisos otorgados**: la pantalla de Google deja destildarlos; sin
+  `gmail.modify` y `drive` la conexión se rechaza. En cualquier rechazo posterior al
+  canje se revoca el permiso recién otorgado.
+- **`access_type=offline` + `prompt=consent`**: Google devuelve siempre un refresh_token,
+  también al reconectar.
+- **El callback siempre redirige al frontend** (`?connected=` o `?connectionError=<code>`),
+  nunca muestra una pantalla de error del backend.
+- **Un cliente OAuth2 por casilla, cacheado en memoria**: el access_token (~1 h) se renueva
+  solo al vencer, no en cada pedido. Railway corre una sola instancia; con varias, cada
+  una tendría su caché (sin problema de consistencia, solo más renovaciones).
+- **Si Google rechaza el token (`invalid_grant`) o no se puede desencriptar**, la casilla
+  pasa sola a `needs_reconnect` y se responde 409 `mailbox_needs_reconnect`.
+- **Desconectar revoca el permiso en Google** antes de borrar; si Google no responde,
+  igual se borra.
+- **No se revoca el token anterior al reconectar**: revocar un refresh_token revoca el
+  permiso completo de esa cuenta y dejaría sin efecto el recién obtenido.
+- **`reconnect` sirve para la primera conexión y para reconectar.**
+
+**Cambio de contrato con el frontend (pendiente de la mini-fase front↔back)**
+- `reconnectMailbox` hoy espera `{ ok }`; con OAuth recibe `{ authUrl }` y tiene que
+  llevar el navegador ahí. `connectMailbox` = `POST /mailboxes` + ese mismo paso.
+- `/admin/mailboxes` puede leer `?connected=<id>` / `?connectionError=<code>` para
+  mostrar un aviso.
+
+**Verificación**
+- ⚠️ Suma la dependencia `googleapis`: correr **`npm install`** y commitear el lockfile.
+- A verificar en local: `build`, `lint`, `test`, `test:e2e`, `migration:run`.
+- A verificar contra Google: conectar `casilla.prueba.tesoreria`, conectar con la cuenta
+  equivocada (→ `wrong_account`), cancelar en Google (→ `access_denied`), desconectar.
+
 ### ⏳ Pendiente
 
-- **Fase 3 — Google:**
-  - OAuth por casilla, con `refresh_token` encriptado (AES-256-GCM).
-  - Interfaz `GoogleMailboxClient.forMailbox(mailboxId)`, que elige la implementación
-    según `authType`.
-  - `POST /mailboxes/:id/reconnect` real y revocar el token al desconectar.
 - **Fase 4 — Messages/Sent** (Gmail API).
 - **Fase 5 — Scheduled messages** (tabla + job periódico).
 - **Fase 6 — Templates.**

@@ -1,4 +1,4 @@
-import { ConflictException, NotFoundException, NotImplementedException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { QueryFailedError, type Repository } from 'typeorm';
 import type { Mailbox } from './entities/mailbox.entity';
 import { MailboxesService } from './mailboxes.service';
@@ -19,8 +19,6 @@ describe('MailboxesService', () => {
     create: jest.Mock;
     save: jest.Mock;
     update: jest.Mock;
-    delete: jest.Mock;
-    exists: jest.Mock;
   };
   let service: MailboxesService;
 
@@ -30,8 +28,6 @@ describe('MailboxesService', () => {
       create: jest.fn((data: Partial<Mailbox>) => data),
       save: jest.fn(),
       update: jest.fn(),
-      delete: jest.fn(),
-      exists: jest.fn(),
     };
     service = new MailboxesService(repo as unknown as Repository<Mailbox>);
   });
@@ -122,31 +118,6 @@ describe('MailboxesService', () => {
       const result = await service.update(ID, { displayName: 'X' });
       expect(repo.update).toHaveBeenCalledWith({ id: ID }, { displayName: 'X' });
       expect(result.displayName).toBe('X');
-    });
-  });
-
-  describe('remove', () => {
-    it('404 si no existe', async () => {
-      repo.delete.mockResolvedValue({ affected: 0 });
-      await expect(service.remove(ID)).rejects.toBeInstanceOf(NotFoundException);
-    });
-
-    it('borra la casilla', async () => {
-      repo.delete.mockResolvedValue({ affected: 1 });
-      await expect(service.remove(ID)).resolves.toBeUndefined();
-      expect(repo.delete).toHaveBeenCalledWith({ id: ID });
-    });
-  });
-
-  describe('reconnect', () => {
-    it('404 si no existe', async () => {
-      repo.exists.mockResolvedValue(false);
-      await expect(service.reconnect(ID)).rejects.toBeInstanceOf(NotFoundException);
-    });
-
-    it('501 si existe (se implementa en la Fase 3)', async () => {
-      repo.exists.mockResolvedValue(true);
-      await expect(service.reconnect(ID)).rejects.toBeInstanceOf(NotImplementedException);
     });
   });
 
