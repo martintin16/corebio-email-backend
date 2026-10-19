@@ -16,10 +16,22 @@ Requisitos: Node 24 LTS (mínimo 22.12; ver `.nvmrc`) y npm.
 
 ```bash
 npm ci                     # instala exactamente lo del package-lock.json
-cp .env.example .env       # completar DATABASE_URL con la contraseña real
+cp .env.example .env       # completar DATABASE_URL (ver abajo)
 npm run migration:run      # crea las tablas en Supabase (una vez por migración nueva)
 npm run start:dev          # http://localhost:4000
 ```
+
+**`DATABASE_URL`: usar el Session pooler.** En Supabase → botón **Connect** → Type
+**URI** → Method **Session pooler** → copiar la URI y poner la contraseña real
+(`postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres`).
+
+- La conexión directa (`db.<ref>.supabase.co`) **solo tiene IPv6**. En redes sin IPv6
+  (la mayoría de las conexiones hogareñas, y puede variar de un día para otro según el
+  proveedor o el router) falla con `ENOTFOUND` / `ENETUNREACH`, aunque Supabase esté bien.
+- El Session pooler funciona por IPv4 y se comporta como una conexión persistente.
+  **No** usar el *Transaction* pooler (puerto 6543).
+- Si la contraseña tiene caracteres especiales (`@ # / % :`), van codificados en la URI
+  (ej. `@` → `%40`).
 
 Probar que anda:
 
@@ -76,12 +88,8 @@ Si falta una obligatoria o tiene un formato inválido, la app **no arranca** y d
 > `npm ci` en el Dockerfile usa el `package-lock.json` del repo: toda dependencia
 > nueva se commitea junto con el lockfile actualizado.
 
-**Conexión directa vs. IPv6:** la connection string directa de Supabase
-(`db.<ref>.supabase.co`) es solo IPv6. Si el deploy falla con errores de conexión
-(`ENETUNREACH`, `ENOTFOUND`, timeout), cambiar `DATABASE_URL` por la del **Session
-pooler** (Supabase → Connect → Session pooler, puerto **5432**). Se comporta como
-una conexión persistente; no usar el *Transaction* pooler (6543). No hace falta
-tocar código.
+**Base de datos en Railway:** usar la misma URI del **Session pooler** que en local
+(ver "Correr en local"), así el deploy no depende de que Railway tenga salida IPv6.
 
 ---
 
@@ -239,7 +247,7 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
 - ✅ Verificado contra Supabase: la migración `CreateUserProfiles` está aplicada y
   `GET /health` y `GET /me` responden bien con un token real (200 con token; 401 sin
   token o con token inválido).
-- ⏳ Falta: el primer deploy en Railway (conexión IPv6 vs. Session pooler).
+- ⏳ Falta: el primer deploy en Railway.
 
 ### ✅ Fase 1 — Mailboxes (sin Google)
 
@@ -285,9 +293,14 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
   cuentas de Gmail propias.
 
 **Verificación**
-- Igual que la Fase 0: build, lint y tests los corre el equipo en local.
-- A verificar contra Supabase: `npm run migration:run` (crea `mailboxes` y
-  `mailbox_access`) y los endpoints con un token de admin real.
+- ✅ En local: `build`, `test` y `test:e2e` pasan. `lint` marcó un
+  `no-unsafe-return` en el `@Transform` del email de `CreateMailboxDto`, corregido
+  moviéndolo a `trimLowerString` (`src/common/transforms.ts`).
+- ✅ Contra Supabase, con token de admin real: migración `CreateMailboxes` aplicada;
+  crear, listar, editar y borrar casillas; email normalizado (minúsculas, sin
+  espacios); 409 con email duplicado; 400 en validaciones (campo de más, id que no es
+  UUID); 404; 501 en reconnect; `GET /me/mailboxes` devuelve `[]` para un admin sin
+  accesos asignados.
 
 ### ⏳ Pendiente
 
