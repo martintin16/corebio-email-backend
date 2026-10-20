@@ -546,8 +546,8 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
   arriba) y ts-jest avisaba que la opción `isolatedModules` está deprecada (ahora va en
   `tsconfig.spec.json`, sin warning). Con `maxWorkers: 50%` Jest abre 6 procesos y la CPU no
   pasa del 74%.
-- A verificar de nuevo: `npm install`, `test`, `test:e2e`.
-- A verificar contra Gmail: listar y abrir recibidos (se marcan como leídos), listar y abrir
+- ✅ `test` y `test:e2e` pasan.
+- ✅ Contra Gmail: listar y abrir recibidos (se marcan como leídos), listar y abrir
   enviados, redactar con y sin adjuntos, responder (queda en el mismo hilo), permisos.
 
 ### ✅ Fase 4.5 — Adjuntos completos (ver, descargar y reenviar)
@@ -585,9 +585,12 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
 - "Reenviar": pasar la casilla y mandar `forwardedAttachments` con los adjuntos del original.
 
 **Verificación**
-- A verificar: `test`, `test:e2e`, `typecheck`, `lint`.
-- A verificar contra Gmail: ver y bajar adjuntos (con tildes en el nombre), reenviar un
-  enviado con sus adjuntos, el mensaje en español con 11 adjuntos.
+- ✅ `lint`, `typecheck`, `test`, `test:e2e`.
+- ❌→ corregido: con Nest 11.2 el mensaje de multer llega como `"Unexpected field - <campo>"`
+  (y multer nuevo dice `"Unexpected file field"`), así que la traducción por texto exacto no
+  coincidía. Ahora se compara el comienzo del mensaje.
+- ✅ Contra Gmail: ver y bajar adjuntos con tildes en el nombre (`filename*` UTF-8), reenviar
+  con `forwardedAttachments`, 11 adjuntos → 400 "Máximo 10 adjuntos".
 
 ### ✅ Fase 5 — Envíos programados
 
@@ -657,14 +660,16 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
   `DELETE`. Mostrar el estado `failed` con su motivo.
 
 **Verificación**
-- A correr: `npm run migration:run`, `test`, `test:e2e`, `typecheck`, `lint`.
-- A verificar contra Gmail: programar a 2 minutos con adjunto (aparece en Borradores y
-  después en Enviados), editar antes de la hora (cambia el borrador), cancelar (desaparece
-  el borrador), programar una respuesta (queda en el hilo), y borrar el borrador desde
-  Gmail antes de la hora (queda `failed` con el motivo).
+- ✅ Migración aplicada; `lint` (tras pasar a `dataSource.query<T>()`), `typecheck`, `test`
+  (328) y `test:e2e` (116).
+- ✅ Contra Gmail: programado con adjunto (borrador → `pending` → enviado a horario con menos
+  de 1 minuto de demora), editar (cambia el borrador), cancelar (204, borra el borrador),
+  respuesta programada en el mismo hilo.
 - ❌→ corregido: borrar el borrador con el tachito lo manda a la Papelera, donde sigue
   existiendo para la API, y el programado se enviaba igual. Ahora se revisa `TRASH` antes de
-  enviar (ver Decisiones).
+  enviar (ver Decisiones). ✅ Verificado: al tacho → `failed` sin enviar; editarlo → borrador
+  nuevo con el adjunto, el viejo sale de la Papelera y se envía a horario; eliminado para
+  siempre → `failed` ("el borrador ya no existe").
 
 ### ⏳ Pendiente
 
