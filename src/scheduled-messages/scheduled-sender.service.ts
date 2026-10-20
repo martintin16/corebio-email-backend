@@ -115,7 +115,7 @@ export class ScheduledSenderService implements OnApplicationBootstrap, OnModuleD
   }
 
   async claimDue(): Promise<ClaimedRow[]> {
-    const result = (await this.dataSource.query(
+    const result = await this.dataSource.query<QueryRows<ClaimedRow>>(
       `UPDATE public.scheduled_messages
           SET status = 'sending', sending_started_at = now(), attempts = attempts + 1,
               updated_at = now()
@@ -131,7 +131,7 @@ export class ScheduledSenderService implements OnApplicationBootstrap, OnModuleD
         RETURNING id, mailbox_id, gmail_draft_id,
                   COALESCE(updated_by, created_by) AS responsible, attempts`,
       [BATCH_SIZE],
-    )) as QueryRows<ClaimedRow>;
+    );
     return rowsOf(result);
   }
 
@@ -176,10 +176,10 @@ export class ScheduledSenderService implements OnApplicationBootstrap, OnModuleD
   /** El responsable sigue activo y con canSend en la casilla. */
   private async responsibleCanSend(row: ClaimedRow): Promise<boolean> {
     if (!row.responsible) return false;
-    const profiles = (await this.dataSource.query(
+    const profiles = await this.dataSource.query<{ status: string }[]>(
       `SELECT status FROM public.user_profiles WHERE id = $1`,
       [row.responsible],
-    )) as { status: string }[];
+    );
     if (profiles[0]?.status !== 'active') return false;
     return this.access.hasPermission(row.responsible, row.mailbox_id, 'send');
   }

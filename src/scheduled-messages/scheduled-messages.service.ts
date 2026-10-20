@@ -245,14 +245,14 @@ export class ScheduledMessagesService {
 
     // Condicional: si el job lo tomó (o alguien lo está editando) no se borra.
     const deleted = rowsOf(
-      (await this.dataSource.query(
+      await this.dataSource.query<QueryRows<{ gmail_draft_id: string | null }>>(
         `DELETE FROM public.scheduled_messages
           WHERE id = $1
             AND status IN ('pending', 'failed')
             AND (locked_until IS NULL OR locked_until < now())
           RETURNING gmail_draft_id`,
         [id],
-      )) as QueryRows<{ gmail_draft_id: string | null }>,
+      ),
     );
     if (deleted.length === 0) {
       throw new ConflictException(
@@ -315,7 +315,7 @@ export class ScheduledMessagesService {
 
   /** Reserva la fila para editarla: el job no la toma mientras tanto. */
   private async lock(id: string): Promise<void> {
-    const locked = (await this.dataSource.query(
+    const locked = await this.dataSource.query<QueryRows<{ id: string }>>(
       `UPDATE public.scheduled_messages
           SET locked_until = now() + make_interval(secs => $2)
         WHERE id = $1
@@ -323,7 +323,7 @@ export class ScheduledMessagesService {
           AND (locked_until IS NULL OR locked_until < now())
         RETURNING id`,
       [id, EDIT_LOCK_SECONDS],
-    )) as QueryRows<{ id: string }>;
+    );
     if (rowsOf(locked).length === 0) throw new ConflictException(BUSY);
   }
 

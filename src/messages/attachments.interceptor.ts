@@ -20,15 +20,31 @@ const MulterFilesInterceptor = FilesInterceptor('attachments', MAX_ATTACHMENTS, 
   limits: { fileSize: MAX_ATTACHMENTS_TOTAL_BYTES, files: MAX_ATTACHMENTS },
 });
 
-/** Mensajes de multer (en inglés) → mensajes para mostrar en el frontend. */
-const MULTER_MESSAGES: Record<string, () => HttpException> = {
-  'File too large': () => new PayloadTooLargeException(ATTACHMENTS_TOO_LARGE),
-  'Too many files': () => new BadRequestException(TOO_MANY_ATTACHMENTS),
-  'Unexpected field': () =>
-    new BadRequestException(
-      `Los adjuntos van en el campo "attachments" (máximo ${MAX_ATTACHMENTS})`,
-    ),
-};
+/**
+ * Mensajes de multer (en inglés) → mensajes para mostrar en el frontend. Se
+ * compara el comienzo: Nest 11.2+ agrega " - <campo>" al final, y las versiones
+ * nuevas de multer dicen "Unexpected file field". El código de error
+ * (LIMIT_UNEXPECTED_FILE, etc.) no sirve: Nest ya lo convirtió en su excepción.
+ */
+const MULTER_MESSAGES: [RegExp, () => HttpException][] = [
+  [/^File too large/i, () => new PayloadTooLargeException(ATTACHMENTS_TOO_LARGE)],
+  [/^Too many files/i, () => new BadRequestException(TOO_MANY_ATTACHMENTS)],
+  [
+    /^Unexpected (file )?field/i,
+    () =>
+      new BadRequestException(
+        `Los adjuntos van en el campo "attachments" (máximo ${MAX_ATTACHMENTS})`,
+      ),
+  ],
+];
+
+/** Traduce un error de multer (ya convertido por Nest) al mensaje en español. */
+export function translateMulterError(err: HttpException): HttpException {
+  const known = MULTER_MESSAGES.find(([pattern]) => pattern.test(err.message));
+  if (known) return known[1]();
+  if (err.getStatus() === 413) return new PayloadTooLargeException(ATTACHMENTS_TOO_LARGE);
+  return new BadRequestException('No se pudo leer el formulario con los adjuntos');
+}
 
 /**
  * Adjuntos: multipart/form-data con los archivos en el campo `attachments`
@@ -47,10 +63,7 @@ export class AttachmentsInterceptor implements NestInterceptor {
       return (await this.inner.intercept(context, next)) as Observable<unknown>;
     } catch (err) {
       if (!(err instanceof HttpException)) throw err;
-      const known = MULTER_MESSAGES[err.message];
-      if (known) throw known();
-      if (err.getStatus() === 413) throw new PayloadTooLargeException(ATTACHMENTS_TOO_LARGE);
-      throw new BadRequestException('No se pudo leer el formulario con los adjuntos');
+      throw translateMulterError(err);
     }
   }
 }
