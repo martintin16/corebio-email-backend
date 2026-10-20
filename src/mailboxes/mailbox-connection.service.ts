@@ -132,8 +132,13 @@ export class MailboxConnectionService {
 
   private async completeConnection(query: OAuthCallbackQuery): Promise<string> {
     if (query.error) {
+      // Google devuelve el `state` también cuando hay error (ej. la persona canceló):
+      // si es válido, se informa de qué casilla venía el intento. Si no se puede
+      // verificar, no se usa (no se confía en un id que no firmamos).
+      const verified = query.state ? await this.state.verify(query.state).catch(() => null) : null;
       throw new ConnectionFailed(
         query.error === 'access_denied' ? 'access_denied' : 'google_error',
+        verified?.mailboxId,
       );
     }
     if (!query.code || !query.state) throw new ConnectionFailed('invalid_request');

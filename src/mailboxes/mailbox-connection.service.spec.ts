@@ -140,6 +140,28 @@ describe('MailboxConnectionService', () => {
       expect(oauth.exchangeCode).not.toHaveBeenCalled();
     });
 
+    it('si al cancelar viene un state válido, informa de qué casilla era', async () => {
+      await expect(
+        service.handleCallback({ error: 'access_denied', state: 'signed-state' }),
+      ).resolves.toBe(`${ADMIN_URL}?connectionError=access_denied&mailboxId=${MBX}`);
+      expect(state.verify).toHaveBeenCalledWith('signed-state');
+      expect(oauth.exchangeCode).not.toHaveBeenCalled();
+      expect(repo.update).not.toHaveBeenCalled();
+    });
+
+    it('si al cancelar el state no es válido, no incluye mailboxId', async () => {
+      state.verify.mockRejectedValue(new InvalidOAuthStateError('invalid'));
+      await expect(
+        service.handleCallback({ error: 'access_denied', state: 'falso' }),
+      ).resolves.toBe(`${ADMIN_URL}?connectionError=access_denied`);
+    });
+
+    it('otro error de Google → google_error (con mailboxId si el state es válido)', async () => {
+      await expect(
+        service.handleCallback({ error: 'server_error', state: 'signed-state' }),
+      ).resolves.toBe(`${ADMIN_URL}?connectionError=google_error&mailboxId=${MBX}`);
+    });
+
     it('sin code o state → invalid_request', async () => {
       await expect(service.handleCallback({ code: 'x' })).resolves.toBe(
         `${ADMIN_URL}?connectionError=invalid_request`,

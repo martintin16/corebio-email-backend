@@ -430,7 +430,9 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
 - **`access_type=offline` + `prompt=consent`**: Google devuelve siempre un refresh_token,
   también al reconectar.
 - **El callback siempre redirige al frontend** (`?connected=` o `?connectionError=<code>`),
-  nunca muestra una pantalla de error del backend.
+  nunca muestra una pantalla de error del backend. Cuando el `state` es válido (también
+  si la persona canceló en Google) se agrega `&mailboxId=<id>`; si no se puede verificar,
+  no se incluye.
 - **Un cliente OAuth2 por casilla, cacheado en memoria**: el access_token (~1 h) se renueva
   solo al vencer, no en cada pedido. Railway corre una sola instancia; con varias, cada
   una tendría su caché (sin problema de consistencia, solo más renovaciones).
@@ -445,14 +447,20 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
 **Cambio de contrato con el frontend (pendiente de la mini-fase front↔back)**
 - `reconnectMailbox` hoy espera `{ ok }`; con OAuth recibe `{ authUrl }` y tiene que
   llevar el navegador ahí. `connectMailbox` = `POST /mailboxes` + ese mismo paso.
-- `/admin/mailboxes` puede leer `?connected=<id>` / `?connectionError=<code>` para
-  mostrar un aviso.
+- `/admin/mailboxes` puede leer `?connected=<id>` / `?connectionError=<code>&mailboxId=<id>`
+  para mostrar un aviso.
+- Si el admin vuelve de Google sin sesión en ese navegador, el middleware lo manda a
+  `/login` y se pierde la vuelta a `/admin/mailboxes`. Conviene que el login recuerde la
+  ruta de destino (cambio del frontend).
 
 **Verificación**
-- ⚠️ Suma la dependencia `googleapis`: correr **`npm install`** y commitear el lockfile.
-- A verificar en local: `build`, `lint`, `test`, `test:e2e`, `migration:run`.
-- A verificar contra Google: conectar `casilla.prueba.tesoreria`, conectar con la cuenta
-  equivocada (→ `wrong_account`), cancelar en Google (→ `access_denied`), desconectar.
+- ✅ Dependencia `googleapis` instalada y lockfile commiteado.
+- ✅ En local: `build`, `lint`, `test` (183) y `test:e2e` (65); migración aplicada.
+- ✅ Contra Google real: conexión (token guardado con prefijo `v1.`, scopes `drive` y
+  `gmail.modify`), cuenta equivocada (`wrong_account` + `mailboxId`, la casilla sigue
+  `needs_reconnect`), cancelar (`access_denied`, sin cambios) y desconectar (204, acceso
+  revocado en Google).
+- Ajuste posterior: incluir `mailboxId` cuando Google devuelve un error con `state` válido.
 
 ### ⏳ Pendiente
 
