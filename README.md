@@ -180,7 +180,7 @@ Códigos de respuesta:
 | `DELETE /mailboxes/:id` | admin | 1·3 | Desconecta: revoca el permiso en Google y borra casilla y accesos → 204 |
 | `POST /mailboxes/:id/reconnect` | admin | 3 | Primera conexión o reconexión con Google → `{ authUrl }` (llevar el navegador ahí) |
 | `GET /mailboxes/oauth/callback` | público | 3 | Vuelta de Google. Redirige a `<FRONTEND_URL>/admin/mailboxes?connected=<id>` o `?connectionError=<code>` |
-| `GET /me/mailboxes` | logueado | 1 | `Mailbox[]` a las que el usuario tiene algún permiso |
+| `GET /me/mailboxes` | logueado | 1·6 | `Mailbox[]` a las que el usuario tiene algún permiso, con `canRead` y `canSend` |
 | `GET /mailboxes/:id/messages` | `canRead` | 4·8 | Últimos 25 de Recibidos → `MessageSummary[]` (con `labelIds`). `?labelId=Label_…` → los de esa etiqueta |
 | `GET /mailboxes/:id/labels` | `canRead` | 8 | Etiquetas de usuario de la casilla → `MailLabel[]` (`{ id, name, color }`) |
 | `PATCH /mailboxes/:id/messages/:messageId/labels` | `canRead` | 8 | `{ add?, remove? }` (ids de etiqueta) → aplica a la conversación → `{ labelIds }` |
@@ -198,10 +198,10 @@ Códigos de respuesta:
 | `PATCH /scheduled-messages/:id` | `canSend` (y en la casilla nueva) | 5 | Cualquier campo + `keepAttachmentIds` + adjuntos nuevos. Solo `pending`/`failed` (si no, 409) |
 | `DELETE /scheduled-messages/:id` | `canSend` en su casilla | 5 | Cancela (borra fila y borrador) → 204. Solo `pending`/`failed` (si no, 409) |
 | `GET /mailboxes/:id/templates` | `canSend` | 6 | Plantillas de la casilla, por nombre → `MessageTemplate[]` |
-| `POST /mailboxes/:id/templates` | `canSend` | 6 | `{ name, subject?, body }` → `MessageTemplate` (201; 409 si el nombre ya existe en la casilla) |
-| `GET /templates/:id` | `canSend` en su casilla | 6 | `MessageTemplate` (404 si no tiene `canSend`) |
-| `PATCH /templates/:id` | `canSend` en su casilla | 6 | `{ name?, subject?, body? }` (`subject: null` lo quita) → `MessageTemplate` |
-| `DELETE /templates/:id` | `canSend` en su casilla | 6 | Borra → 204 |
+| `POST /mailboxes/:id/templates` | `canSend` | 6 | `{ name, subject?, body }` → `MessageTemplate` (201; 409 `TEMPLATE_NAME_TAKEN` si el nombre ya existe en la casilla) |
+| `GET /mailboxes/:id/templates/:templateId` | `canSend` | 6 | `MessageTemplate` (404 si no es de esa casilla) |
+| `PATCH /mailboxes/:id/templates/:templateId` | `canSend` | 6 | `{ name?, subject?, body? }` (`subject: null` lo quita) → `MessageTemplate` |
+| `DELETE /mailboxes/:id/templates/:templateId` | `canSend` | 6 | Borra → 204 |
 | `GET /mailboxes/:id/drive/items?userId=…&folderId=root` | admin | 7 | Contenido de una carpeta del Drive de la casilla → `DriveItem[]` (`shared` = compartido directamente con esa persona; `inherited` = accede por una carpeta) |
 | `GET /mailboxes/:id/drive/shared?userId=…` | admin | 7 | Ids de lo compartido directamente con la persona en ese Drive |
 | `PUT /mailboxes/:id/drive/access/:userId` | admin | 7 | `{ itemIds }` (selección final) → comparte lo nuevo como Editor y quita lo destildado → `{ added, removed, skipped, failed }` |
@@ -716,8 +716,26 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
 
 **Cambios de contrato con el frontend (para la mini-fase front↔back)**
 - `MessageTemplate` suma `subject` (o `null`) y `mailboxId`; al elegir una con asunto,
-  completar también el asunto.
-- Falta en el front la pantalla para crear, editar y borrar plantillas (el backend ya está).
+  completar también el asunto. La pantalla Plantillas del front (Anexo 4) tiene que sumar el
+  campo "Asunto (opcional)".
+
+**Ajuste al contrato del front (Anexo 4, pantalla Plantillas)**
+- Detalle, edición y borrado pasan a `/mailboxes/:mailboxId/templates/:templateId` (se sacó
+  `/templates/:id`): el permiso lo chequea el mismo guard de casilla que en el resto, y una
+  plantilla de otra casilla → 404.
+- Nombre de 1 a 60 caracteres, **único sin distinguir mayúsculas ni tildes** ("Confirmación"
+  y "confirmacion" chocan): columna `name_key` con el nombre normalizado e índice único
+  (migración `1791400000000-TemplateNameKey`, que completa las existentes y, si dos solo se
+  diferenciaban por tildes, le agrega " (2)" a la segunda). Repetido → 409 con
+  `code: 'TEMPLATE_NAME_TAKEN'`.
+- `preview` de 48 caracteres. La respuesta suma `updatedAt` y `updatedByName` (null si esa
+  persona se borró), para "Editada por … · fecha".
+- **Permisos: se mantiene `canSend`** (no "cualquier acceso", como asumía el front): las
+  plantillas se usan en Redactar. Para que el front sepa qué mostrar, `GET /me/mailboxes`
+  suma `canRead` y `canSend`; la pantalla Plantillas lista solo las casillas con `canSend`
+  (y Redactar también debería ofrecer solo esas).
+- Verificación: a correr `migration:run`, `lint`, `typecheck`, `test`, `test:e2e`, y probar
+  crear "Confirmación" y después "confirmacion" → 409 `TEMPLATE_NAME_TAKEN`.
 
 **Verificación**
 - ✅ Migración aplicada; `lint`, `typecheck`, `test` (342) y `test:e2e` (130).

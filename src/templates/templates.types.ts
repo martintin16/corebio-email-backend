@@ -1,6 +1,6 @@
 /**
  * Respuesta de la API — `MessageTemplate` de `lib/types/template.ts` del frontend
- * (`id, name, preview, body`) + `subject` y `mailboxId`.
+ * (`id, name, preview, body, updatedAt, updatedByName`) + `subject` y `mailboxId`.
  */
 export interface MessageTemplate {
   id: string;
@@ -12,4 +12,8 @@ export interface MessageTemplate {
   subject: string | null;
   /** HTML sanitizado (el mismo formato que guarda el editor). */
   body: string;
+  /** Última edición (o alta), ISO 8601. */
+  updatedAt: string;
+  /** Nombre de quien la editó por última vez; null si esa persona ya no existe. */
+  updatedByName: string | null;
 }

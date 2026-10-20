@@ -123,9 +123,11 @@ describe('MailboxesService', () => {
 
   describe('listForUser', () => {
     it('mapea las casillas del usuario al formato Mailbox del frontend', async () => {
-      repo.query.mockResolvedValue([{ id: ID, email: 'a@b.org', display_name: 'A' }]);
+      repo.query.mockResolvedValue([
+        { id: ID, email: 'a@b.org', display_name: 'A', can_read: true, can_send: false },
+      ]);
       await expect(service.listForUser('u1')).resolves.toEqual([
-        { id: ID, email: 'a@b.org', displayName: 'A' },
+        { id: ID, email: 'a@b.org', displayName: 'A', canRead: true, canSend: false },
       ]);
       expect(repo.query).toHaveBeenCalledWith(expect.any(String), ['u1']);
     });

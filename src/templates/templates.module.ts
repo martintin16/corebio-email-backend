@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { MailboxesModule } from '../mailboxes/mailboxes.module';
 import { Template } from './entities/template.entity';
-import { MailboxTemplatesController, TemplatesController } from './templates.controller';
+import { TemplatesController } from './templates.controller';
 import { TemplatesService } from './templates.service';
 
 /**
@@ -12,7 +12,7 @@ import { TemplatesService } from './templates.service';
  */
 @Module({
   imports: [TypeOrmModule.forFeature([Template]), MailboxesModule],
-  controllers: [MailboxTemplatesController, TemplatesController],
+  controllers: [TemplatesController],
   providers: [TemplatesService],
 })
 export class TemplatesModule {}

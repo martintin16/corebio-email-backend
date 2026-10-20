@@ -102,9 +102,15 @@ export class MailboxesService {
 
   /** Casillas a las que el usuario tiene algún permiso (GET /me/mailboxes). */
   async listForUser(userId: string): Promise<UserMailbox[]> {
-    const rows: { id: string; email: string; display_name: string }[] = await this.mailboxes.query(
+    const rows: {
+      id: string;
+      email: string;
+      display_name: string;
+      can_read: boolean;
+      can_send: boolean;
+    }[] = await this.mailboxes.query(
       `
-        SELECT m.id, m.email, m.display_name
+        SELECT m.id, m.email, m.display_name, a.can_read, a.can_send
         FROM public.mailboxes m
         JOIN public.mailbox_access a ON a.mailbox_id = m.id
         WHERE a.user_id = $1
@@ -112,6 +118,12 @@ export class MailboxesService {
         `,
       [userId],
     );
-    return rows.map((row) => ({ id: row.id, email: row.email, displayName: row.display_name }));
+    return rows.map((row) => ({
+      id: row.id,
+      email: row.email,
+      displayName: row.display_name,
+      canRead: row.can_read,
+      canSend: row.can_send,
+    }));
   }
 }

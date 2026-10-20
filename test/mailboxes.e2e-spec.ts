@@ -244,7 +244,15 @@ describe('Mailboxes (e2e)', () => {
     });
 
     it('devuelve las casillas del usuario logueado (cualquier rol)', async () => {
-      const mine = [{ id: MAILBOX_ID, email: 'tesoreria@corebio.org', displayName: 'Tesorería' }];
+      const mine = [
+        {
+          id: MAILBOX_ID,
+          email: 'tesoreria@corebio.org',
+          displayName: 'Tesorería',
+          canRead: true,
+          canSend: false,
+        },
+      ];
       service.listForUser.mockResolvedValue(mine);
       const res = await http()
         .get('/me/mailboxes')

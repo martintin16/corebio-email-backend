@@ -17,11 +17,17 @@ export interface AdminMailbox {
   status: MailboxConnectionStatus;
 }
 
-/** Respuesta de GET /me/mailboxes — igual a `Mailbox` del frontend. */
+/** Respuesta de GET /me/mailboxes — `Mailbox` del frontend + los permisos de la persona. */
 export interface UserMailbox {
   id: string;
   email: string;
   displayName: string;
+  /**
+   * Lo que la persona puede hacer en esa casilla, para que el front muestre
+   * solo lo que corresponde (Redactar y Plantillas con canSend, etc.).
+   */
+  canRead: boolean;
+  canSend: boolean;
 }
 
 /** Igual a `MailboxAccessSummary` del frontend (va dentro de `AdminUser`). */

@@ -4,7 +4,7 @@ import { trimString } from '../../common/transforms';
 import { HasVisibleText } from '../../messages/dto/has-visible-text.validator';
 import { MAX_BODY_LENGTH } from '../../messages/dto/send-message.dto';
 
-export const MAX_TEMPLATE_NAME_LENGTH = 100;
+export const MAX_TEMPLATE_NAME_LENGTH = 60;
 
 /** Body de POST /mailboxes/:mailboxId/templates. */
 export class CreateTemplateDto {

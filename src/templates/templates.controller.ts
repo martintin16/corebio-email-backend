@@ -17,18 +17,28 @@ import { UpdateTemplateDto } from './dto/update-template.dto';
 import { TemplatesService } from './templates.service';
 import type { MessageTemplate } from './templates.types';
 
-/** Plantillas de una casilla: listar (selector de Redactar) y crear. Pide canSend. */
+/**
+ * Plantillas de una casilla: el selector de Redactar y la pantalla Plantillas
+ * (crear, editar, duplicar = crear, borrar). Todo pide canSend en la casilla.
+ */
+@RequireMailboxAccess('send')
 @Controller('mailboxes/:mailboxId/templates')
-export class MailboxTemplatesController {
+export class TemplatesController {
   constructor(private readonly templates: TemplatesService) {}
 
-  @RequireMailboxAccess('send')
   @Get()
   list(@Param('mailboxId', ParseUUIDPipe) mailboxId: string): Promise<MessageTemplate[]> {
     return this.templates.listForMailbox(mailboxId);
   }
 
-  @RequireMailboxAccess('send')
+  @Get(':templateId')
+  find(
+    @Param('mailboxId', ParseUUIDPipe) mailboxId: string,
+    @Param('templateId', ParseUUIDPipe) templateId: string,
+  ): Promise<MessageTemplate> {
+    return this.templates.findInMailbox(mailboxId, templateId);
+  }
+
   @Post()
   create(
     @CurrentUser() user: AuthenticatedUser,
@@ -37,36 +47,23 @@ export class MailboxTemplatesController {
   ): Promise<MessageTemplate> {
     return this.templates.create(user.id, mailboxId, dto);
   }
-}
 
-/** Detalle, edición y borrado. canSend en la casilla de la plantilla (si no, 404). */
-@Controller('templates')
-export class TemplatesController {
-  constructor(private readonly templates: TemplatesService) {}
-
-  @Get(':id')
-  find(
-    @CurrentUser() user: AuthenticatedUser,
-    @Param('id', ParseUUIDPipe) id: string,
-  ): Promise<MessageTemplate> {
-    return this.templates.findForUser(user.id, id);
-  }
-
-  @Patch(':id')
+  @Patch(':templateId')
   update(
     @CurrentUser() user: AuthenticatedUser,
-    @Param('id', ParseUUIDPipe) id: string,
+    @Param('mailboxId', ParseUUIDPipe) mailboxId: string,
+    @Param('templateId', ParseUUIDPipe) templateId: string,
     @Body() dto: UpdateTemplateDto,
   ): Promise<MessageTemplate> {
-    return this.templates.update(user.id, id, dto);
+    return this.templates.update(user.id, mailboxId, templateId, dto);
   }
 
-  @Delete(':id')
+  @Delete(':templateId')
   @HttpCode(204)
   remove(
-    @CurrentUser() user: AuthenticatedUser,
-    @Param('id', ParseUUIDPipe) id: string,
+    @Param('mailboxId', ParseUUIDPipe) mailboxId: string,
+    @Param('templateId', ParseUUIDPipe) templateId: string,
   ): Promise<void> {
-    return this.templates.remove(user.id, id);
+    return this.templates.remove(mailboxId, templateId);
   }
 }

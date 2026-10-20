@@ -15,9 +15,12 @@ export class Template {
   @Column({ name: 'mailbox_id', type: 'uuid' })
   mailboxId: string;
 
-  /** Único por casilla sin distinguir mayúsculas (índice en la base). */
   @Column({ type: 'text' })
   name: string;
+
+  /** `name` normalizado (sin tildes ni mayúsculas): único por casilla (índice en la base). */
+  @Column({ name: 'name_key', type: 'text' })
+  nameKey: string;
 
   @Column({ type: 'text', nullable: true })
   subject: string | null;
