@@ -128,6 +128,7 @@ src/
   scheduled-messages/     envíos programados: tabla, borradores de Gmail y job por minuto (Fase 5)
   templates/              plantillas por casilla (Fase 6)
   drive-access/           compartir carpetas y archivos del Drive de una casilla (Fase 7)
+  contacts/               contactos y grupos de Google Contacts, solo lectura (Fase 8)
 test/
   utils/jwt.ts            simula a Supabase Auth con claves ES256 propias
   utils/test-app.ts       app de prueba con la auth real y Supabase/DB simulados
@@ -204,6 +205,9 @@ Códigos de respuesta:
 | `GET /mailboxes/:id/drive/items?userId=…&folderId=root` | admin | 7 | Contenido de una carpeta del Drive de la casilla → `DriveItem[]` (`shared` = compartido directamente con esa persona; `inherited` = accede por una carpeta) |
 | `GET /mailboxes/:id/drive/shared?userId=…` | admin | 7 | Ids de lo compartido directamente con la persona en ese Drive |
 | `PUT /mailboxes/:id/drive/access/:userId` | admin | 7 | `{ itemIds }` (selección final) → comparte lo nuevo como Editor y quita lo destildado → `{ added, removed, skipped, failed }` |
+| `GET /mailboxes/:id/contact-groups` | `canSend` | 8 | Grupos de Google Contacts de la casilla → `ContactGroup[]` |
+| `GET /mailboxes/:id/contact-groups/:groupId/members` | `canSend` | 8 | Miembros con email → `Contact[]` |
+| `GET /mailboxes/:id/contacts?q=` | `canSend` | 8 | Sin `q`: todos los de "Mis contactos". Con `q`: búsqueda en Mis contactos + Otros contactos → `Contact[]` |
 | `GET /users` | admin | 2 | `AdminUser[]` |
 | `POST /users` | admin | 2 | `{ name, email, role, access }` → invita y devuelve `AdminUser` (201; 409 si el email existe) |
 | `PATCH /users/:id/permissions` | admin | 2·7 | `{ role, access }` (reemplaza todos los permisos) → `AdminUser`. Las casillas que pierde le quitan lo compartido en su Drive |
@@ -245,6 +249,9 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
     refresh_token no vencen. (En el proyecto de desarrollo, en modo *Testing*, vencen a
     los 7 días y la casilla pasa a "reconectar".)
   - Redirect URI de producción: `https://<backend>/mailboxes/oauth/callback`.
+  - APIs activadas: **Gmail API, Google Drive API y People API**. En la pantalla de
+    consentimiento, los permisos `gmail.modify`, `drive`, `contacts.readonly` y
+    `contacts.other.readonly`.
   - Actualizar `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` y `GOOGLE_OAUTH_REDIRECT_URI`
     y reconectar cada casilla una vez (los tokens son de cada client).
 - [ ] **Deploy en Railway** (ver arriba) y agregar la URL del backend al frontend.
@@ -851,6 +858,58 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
 - Crear, renombrar o borrar etiquetas queda fuera (se hace desde Gmail).
 - El filtro del front hoy es local sobre los 25 cargados; `?labelId=` permite traer los de una
   etiqueta desde Gmail (sugerido para la conexión con el front).
+
+#### 8.3 Contactos y grupos (People API)
+
+**Qué se construyó** (módulo nuevo `contacts/`, solo lectura, pide `canSend`)
+- `GET …/contact-groups`: los grupos creados por el usuario (no los de sistema como
+  "Destacados"), por nombre, con `memberCount` de Google.
+- `GET …/contact-groups/:groupId/members`: los miembros **con email** (sin email no sirven para
+  enviar; por eso pueden ser menos que `memberCount`), con su email principal.
+- `GET …/contacts`: sin `q`, todos los de "Mis contactos" (el front arma con eso el
+  autocompletado y "Todos los contactos"); con `q`, busca en "Mis contactos" y en **"Otros
+  contactos"** (a quienes la casilla ya les escribió), sin repetidos, hasta 20.
+- Permisos de Google nuevos: `contacts.readonly` y `contacts.other.readonly`.
+
+**Decisiones**
+- **Los permisos de Contactos son opcionales al conectar**: Google ahora deja destildar permisos
+  uno por uno. Sin Gmail o Drive la conexión se rechaza como antes (`missing_scopes`); sin
+  Contactos la casilla conecta igual y solo estos endpoints responden **409
+  `mailbox_missing_scope`** ("Reconectá la casilla para dar acceso a Contactos"). Lo mismo
+  pasa con las casillas conectadas antes de esta fase: hay que reconectarlas una vez. Sin
+  `contacts.other.readonly`, la búsqueda usa solo "Mis contactos".
+- **Caché de 5 minutos** en memoria para grupos, miembros y la lista completa, por la cuota
+  de la People API (pedidos por minuto, gratis). Un contacto recién agregado en Google puede
+  tardar ese tiempo en aparecer. La búsqueda con `q` no se guarda.
+- La búsqueda de Google necesita un pedido "en vacío" antes (si no, las primeras vuelven
+  vacías): se hace una vez por hora y por casilla.
+- Si Google corta por cuota → **429 `GOOGLE_RATE_LIMITED`** ("probá en unos segundos").
+- Topes: 1000 miembros por grupo y 10.000 contactos por casilla.
+- Crear o editar contactos y grupos queda fuera (se hace en Google Contacts).
+
+**Cambios de contrato con el frontend (para la mini-fase front↔back)**
+- Redactar y programados: `{ to, cc, bcc }` como ya los manda el front. El 429
+  `RECIPIENT_LIMIT_EXCEEDED` trae `limit`, `remaining` y `requested` para el aviso.
+- `ScheduledMessage` suma `cc` y `bcc`; un programado puede quedar `failed` por cupo.
+- Etiquetas: `PATCH …/labels` devuelve `{ labelIds }`; opcional usar `?labelId=` para filtrar
+  desde Gmail en vez de sobre los 25 cargados.
+- Contactos: mostrar "Reconectá la casilla" ante 409 `mailbox_missing_scope` y "probá en unos
+  segundos" ante 429 `GOOGLE_RATE_LIMITED`. Hoy el front no usa `?q=`: si quiere sumar "Otros
+  contactos" al autocompletado, conviene buscar con `q` esperando ~300 ms después de tipear.
+
+**Para probar (una vez, en el proyecto de Google Cloud de desarrollo)**
+1. Activar la **People API**.
+2. En la pantalla de consentimiento (Data Access / Scopes), agregar `contacts.readonly` y
+   `contacts.other.readonly`.
+3. Reconectar las dos casillas desde la app (con `POST /mailboxes/:id/reconnect`).
+
+**Verificación (toda la Fase 8)**
+- A correr: `npm run migration:run` (`AddRecipientsAndSendLog`), `lint`, `typecheck`, `test`,
+  `test:e2e`.
+- A verificar contra Google: Redactar con varios en to/cc/bcc (los de Bcc reciben y no se ven),
+  cupo bajo (`MAILBOX_DAILY_RECIPIENT_LIMIT=3`) → 429, programado con cc/bcc, etiquetas (listar,
+  agregar/sacar y verlo en Gmail), contactos/grupos/búsqueda, y una casilla sin reconectar →
+  409 `mailbox_missing_scope`.
 
 ### ⏳ Pendiente
 

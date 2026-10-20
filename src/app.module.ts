@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from './auth/auth.module';
 import { envValidationSchema } from './config/env.validation';
 import { buildDataSourceOptions } from './database/typeorm.config';
+import { ContactsModule } from './contacts/contacts.module';
 import { DriveAccessModule } from './drive-access/drive-access.module';
 import { HealthModule } from './health/health.module';
 import { MailboxesModule } from './mailboxes/mailboxes.module';
@@ -39,6 +40,7 @@ import { UsersModule } from './users/users.module';
     ScheduledMessagesModule,
     TemplatesModule,
     DriveAccessModule,
+    ContactsModule,
   ],
 })
 export class AppModule {}

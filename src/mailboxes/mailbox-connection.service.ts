@@ -5,7 +5,7 @@ import { Repository } from 'typeorm';
 import { sameMailboxAddress } from '../google/email-address';
 import { GoogleMailboxClient } from '../google/google-mailbox-client';
 import { GoogleOAuthClient, type ExchangedTokens } from '../google/google-oauth.client';
-import { GOOGLE_SCOPES } from '../google/google.constants';
+import { REQUIRED_GOOGLE_SCOPES } from '../google/google.constants';
 import { OAuthStateService } from '../google/oauth-state.service';
 import { TokenCipher } from '../google/token-cipher';
 import { Mailbox } from './entities/mailbox.entity';
@@ -186,8 +186,9 @@ export class MailboxConnectionService {
       throw new ConnectionFailed(code, mailboxId);
     };
 
-    // La pantalla de Google permite destildar permisos: sin los dos, la casilla no sirve.
-    const missing = GOOGLE_SCOPES.filter((scope) => !tokens.scopes.includes(scope));
+    // La pantalla de Google permite destildar permisos: sin Gmail y Drive la casilla
+    // no sirve. Los de Contactos son opcionales (ver google.constants.ts).
+    const missing = REQUIRED_GOOGLE_SCOPES.filter((scope) => !tokens.scopes.includes(scope));
     if (missing.length > 0) return reject('missing_scopes');
 
     if (!accountEmail) return reject('profile_failed');

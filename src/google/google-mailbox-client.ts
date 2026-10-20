@@ -7,7 +7,7 @@ import {
   NotImplementedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { google, type Auth, type drive_v3, type gmail_v1 } from 'googleapis';
+import { google, type Auth, type drive_v3, type gmail_v1, type people_v1 } from 'googleapis';
 import { Repository } from 'typeorm';
 import { Mailbox } from '../mailboxes/entities/mailbox.entity';
 import type { MailboxAuthType } from '../mailboxes/mailboxes.types';
@@ -23,6 +23,10 @@ export interface MailboxGoogleApis {
   displayName: string;
   gmail: gmail_v1.Gmail;
   drive: drive_v3.Drive;
+  /** People API (contactos y grupos, Fase 8). */
+  people: people_v1.People;
+  /** Permisos que Google otorgó al conectar (para saber si hay acceso a Contactos). */
+  scopes: string[];
 }
 
 /**
@@ -150,6 +154,8 @@ export class DefaultGoogleMailboxClient extends GoogleMailboxClient {
       displayName: mailbox.displayName,
       gmail: google.gmail({ version: 'v1', auth: client }),
       drive: google.drive({ version: 'v3', auth: client }),
+      people: google.people({ version: 'v1', auth: client }),
+      scopes: (mailbox.googleScopes ?? '').split(/\s+/).filter(Boolean),
     };
   }
 

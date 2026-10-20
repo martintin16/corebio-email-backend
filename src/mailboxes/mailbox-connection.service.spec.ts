@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import type { Repository } from 'typeorm';
 import type { GoogleMailboxClient } from '../google/google-mailbox-client';
 import type { GoogleOAuthClient } from '../google/google-oauth.client';
-import { GOOGLE_SCOPES } from '../google/google.constants';
+import { GOOGLE_SCOPES, REQUIRED_GOOGLE_SCOPES } from '../google/google.constants';
 import { InvalidOAuthStateError, type OAuthStateService } from '../google/oauth-state.service';
 import type { TokenCipher } from '../google/token-cipher';
 import type { Mailbox } from './entities/mailbox.entity';
@@ -215,6 +215,15 @@ describe('MailboxConnectionService', () => {
       );
       expect(oauth.revokeToken).toHaveBeenCalledWith('refresh-1');
       expect(repo.update).not.toHaveBeenCalled();
+    });
+
+    it('sin los permisos de Contactos (opcionales) conecta igual y guarda los que dio', async () => {
+      oauth.exchangeCode.mockResolvedValue({ ...goodTokens, scopes: [...REQUIRED_GOOGLE_SCOPES] });
+      await expect(service.handleCallback(query)).resolves.toContain(`connected=${MBX}`);
+      expect(repo.update).toHaveBeenCalledWith(
+        { id: MBX },
+        expect.objectContaining({ googleScopes: REQUIRED_GOOGLE_SCOPES.join(' ') }),
+      );
     });
 
     it('faltan permisos al RECONECTAR una casilla que ya tenía credenciales → no se revoca', async () => {
