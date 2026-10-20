@@ -125,7 +125,7 @@ src/
   mailboxes/              casillas, permisos por casilla, @RequireMailboxAccess (Fase 1)
   messages/               Recibidos, Enviados, Redactar, Responder y adjuntos contra Gmail (Fases 4 y 4.5)
   scheduled-messages/     envíos programados: tabla, borradores de Gmail y job por minuto (Fase 5)
-  templates/              Fase 6 (módulo vacío)
+  templates/              plantillas por casilla (Fase 6)
   drive-access/           Fase 7 (módulo vacío)
 test/
   utils/jwt.ts            simula a Supabase Auth con claves ES256 propias
@@ -193,6 +193,11 @@ Códigos de respuesta:
 | `POST /scheduled-messages` | `canSend` en `mailboxId` | 5 | `{ mailboxId, to, subject, body, scheduledAt, replyToMessageId?, forwardedAttachments? }` + adjuntos (multipart) → 201 |
 | `PATCH /scheduled-messages/:id` | `canSend` (y en la casilla nueva) | 5 | Cualquier campo + `keepAttachmentIds` + adjuntos nuevos. Solo `pending`/`failed` (si no, 409) |
 | `DELETE /scheduled-messages/:id` | `canSend` en su casilla | 5 | Cancela (borra fila y borrador) → 204. Solo `pending`/`failed` (si no, 409) |
+| `GET /mailboxes/:id/templates` | `canSend` | 6 | Plantillas de la casilla, por nombre → `MessageTemplate[]` |
+| `POST /mailboxes/:id/templates` | `canSend` | 6 | `{ name, subject?, body }` → `MessageTemplate` (201; 409 si el nombre ya existe en la casilla) |
+| `GET /templates/:id` | `canSend` en su casilla | 6 | `MessageTemplate` (404 si no tiene `canSend`) |
+| `PATCH /templates/:id` | `canSend` en su casilla | 6 | `{ name?, subject?, body? }` (`subject: null` lo quita) → `MessageTemplate` |
+| `DELETE /templates/:id` | `canSend` en su casilla | 6 | Borra → 204 |
 | `GET /users` | admin | 2 | `AdminUser[]` |
 | `POST /users` | admin | 2 | `{ name, email, role, access }` → invita y devuelve `AdminUser` (201; 409 si el email existe) |
 | `PATCH /users/:id/permissions` | admin | 2 | `{ role, access }` (reemplaza todos los permisos) → `AdminUser` |
@@ -671,7 +676,41 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
   nuevo con el adjunto, el viejo sale de la Papelera y se envía a horario; eliminado para
   siempre → `failed` ("el borrador ya no existe").
 
+### ✅ Fase 6 — Plantillas
+
+**Qué se construyó**
+- Tabla `templates` (migración `1791200000000-CreateTemplates`, con el cerrojo de RLS) y los
+  endpoints de la tabla de arriba.
+- `MessageTemplate`: `{ id, mailboxId, name, preview, subject, body }`. `preview` lo calcula
+  el backend (el comienzo del cuerpo en una línea, hasta 80 caracteres).
+- Tests unitarios (servicio, preview, nombres repetidos, límite) y e2e (permisos y validaciones).
+
+**Decisiones**
+- **Se crean en la app, no se leen de Gmail**: la Gmail API no da acceso a las plantillas de
+  Gmail (Redactar → ⋮ → Plantillas). Las que ya existan ahí se copian a mano una vez.
+- **Las usa y las gestiona cualquiera con `canSend` en la casilla**: son quienes redactan, y
+  no suma trabajo al admin. Con solo `canRead` no se ven (el selector está en Redactar). Como
+  en el resto, ser admin no da acceso implícito.
+- **Por casilla**: cada casilla tiene las suyas; borrar la casilla borra sus plantillas.
+- **Asunto opcional** (`subject`): si la plantilla lo tiene, al elegirla se completa también
+  el asunto. Vacío o `null` = sin asunto.
+- **Nombre único por casilla, sin distinguir mayúsculas** (índice sobre `lower(name)`) → 409.
+  Hasta 100 caracteres; hasta 100 plantillas por casilla.
+- **El cuerpo pasa por el mismo sanitizador que Redactar** y tiene el mismo límite.
+- **Sin variables**: textos como `[fecha]` quedan como texto común y se completan al redactar.
+- **`preview` es el comienzo del cuerpo**, no solo la primera línea: la primera línea suele
+  ser un saludo ("Hola,") que no distingue una plantilla de otra.
+
+**Cambios de contrato con el frontend (para la mini-fase front↔back)**
+- `MessageTemplate` suma `subject` (o `null`) y `mailboxId`; al elegir una con asunto,
+  completar también el asunto.
+- Falta en el front la pantalla para crear, editar y borrar plantillas (el backend ya está).
+
+**Verificación**
+- A correr: `npm run migration:run`, `lint`, `typecheck`, `test`, `test:e2e`.
+- A verificar: crear, listar (orden por nombre), editar, quitar el asunto, nombre repetido →
+  409, sin `canSend` → 403/404, borrar.
+
 ### ⏳ Pendiente
 
-- **Fase 6 — Templates.**
 - **Fase 7 — Drive access** (Drive API).
