@@ -907,12 +907,16 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
 3. Reconectar las dos casillas desde la app (con `POST /mailboxes/:id/reconnect`).
 
 **Verificación (toda la Fase 8)**
-- A correr: `npm run migration:run` (`AddRecipientsAndSendLog`), `lint`, `typecheck`, `test`,
-  `test:e2e`.
-- A verificar contra Google: Redactar con varios en to/cc/bcc (los de Bcc reciben y no se ven),
-  cupo bajo (`MAILBOX_DAILY_RECIPIENT_LIMIT=3`) → 429, programado con cc/bcc, etiquetas (listar,
-  agregar/sacar y verlo en Gmail), contactos/grupos/búsqueda, y una casilla sin reconectar →
-  409 `mailbox_missing_scope`.
+- ✅ Migración `AddRecipientsAndSendLog` aplicada; `lint`, `typecheck`, `test` (427),
+  `test:e2e` (165).
+- ❌→ corregido: lint (`no-base-to-string`), `to` quedaba obligatorio en el tipo de
+  `CreateScheduledMessageDto` y dos e2e usaban `cc` como "campo de más" (ahora es válido).
+- ✅ Contra Google: 409 `mailbox_missing_scope` antes de reconectar y reconexión con los
+  permisos de Contactos; to + cc + bcc llega a todos y el Bcc no se ve; sin destinatarios o con
+  un email inválido → 400; con límite 3, un envío a 4 → 429 `RECIPIENT_LIMIT_EXCEEDED`;
+  programado con cc/bcc enviado a horario; etiquetas (listar, agregar, `labelIds`, sacar,
+  `INBOX` → 400); contactos (grupos, miembros, lista y búsqueda con `q`); `cc`/`bcc` en el
+  detalle de enviados y `cc` en el de recibidos.
 
 ### ⏳ Pendiente
 
