@@ -60,10 +60,10 @@ Local Storage / cookies de Supabase → `access_token`).
 
 **Checklist antes de cada commit:** `npm run build && npm run typecheck && npm run lint && npm test && npm run test:e2e`.
 
-Jest corre con `maxWorkers: 50%` y ts-jest con `isolatedModules: true` (solo transpila,
-sin chequear tipos): con el chequeo completo en cada proceso, una máquina de 12 núcleos y
-16 GB quedaba al 100% de CPU, RAM y disco. Los tipos los siguen chequeando `build` y
-`typecheck`, por eso están en el checklist.
+Jest corre con `maxWorkers: 50%` y ts-jest usa `tsconfig.spec.json` (`isolatedModules: true`:
+solo transpila, sin chequear tipos). Con el chequeo completo en cada proceso, una máquina de
+12 núcleos y 16 GB quedaba al 100% de CPU, RAM y disco. Los tipos los siguen chequeando
+`build` y `typecheck` (con `tsconfig.json`, sin cambios), por eso están en el checklist.
 
 ### Variables de entorno
 
@@ -486,7 +486,12 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
 - Armado del mensaje (`gmail/mime.ts`) con el generador MIME de `nodemailer`; el envío lo
   hace la Gmail API como subida `message/rfc822`.
 - Adjuntos: `multipart/form-data`, campo `attachments`, hasta 10 archivos y 20 MB en total.
-- Jest más liviano (`maxWorkers: 50%`, ts-jest `isolatedModules`).
+- Jest más liviano (`maxWorkers: 50%`, `tsconfig.spec.json` con `isolatedModules`).
+- **`sanitize-html` fijado en `~2.17.1`.** Desde la 2.18 depende de `htmlparser2@12`, que es
+  solo ESM: la app funciona igual (Node 24 carga ESM desde CommonJS), pero Jest no puede
+  importarlo y las suites que lo usan fallan con `Cannot use import statement outside a
+  module`. La 2.17.x tiene la misma API y el mismo sanitizado. Revisar al pasar a una
+  versión de Jest con soporte de `require(esm)`.
 - Tests unitarios (parseo, sanitizador, MIME, adjuntos, concurrencia, servicio con Gmail
   simulado) y e2e (permisos read/send, validaciones, multipart, límites).
 
@@ -518,9 +523,11 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
 - Recomendado: que "Reenviar" pase también la casilla (`/compose?forward=<id>&mailbox=<id>`).
 
 **Verificación**
-- ⚠️ Suma dependencias (`nodemailer`, `sanitize-html`, `html-to-text` y sus tipos): correr
-  **`npm install`** y commitear el lockfile.
-- A verificar en local: `build`, `typecheck`, `lint`, `test`, `test:e2e`.
+- ✅ Dependencias instaladas y lockfile commiteado. `build`, `typecheck` y `lint` pasan.
+- ❌→ corregido: `test`/`test:e2e` fallaban por `sanitize-html@2.18` (ESM, ver arriba) y
+  ts-jest avisaba que la opción `isolatedModules` está deprecada (ahora va en
+  `tsconfig.spec.json`). Con `maxWorkers: 50%` Jest abre 6 procesos y la CPU no pasa del 74%.
+- A verificar de nuevo: `npm install` (baja a sanitize-html 2.17.x), `test`, `test:e2e`.
 - A verificar contra Gmail: listar y abrir recibidos (se marcan como leídos), listar y abrir
   enviados, redactar con y sin adjuntos, responder (queda en el mismo hilo), permisos.
 

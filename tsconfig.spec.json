@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Solo para Jest: ts-jest transpila cada archivo sin chequear tipos (mucho más
+    // liviano). Los tipos los chequean `npm run build` y `npm run typecheck`, que usan
+    // tsconfig.json y no se ven afectados.
+    "isolatedModules": true
+  }
+}
