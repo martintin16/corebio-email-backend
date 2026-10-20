@@ -16,6 +16,7 @@ import type { MailboxPermission } from '../mailboxes/mailboxes.types';
 import { toOutgoingAttachments, type UploadedAttachment } from '../messages/attachments';
 import { htmlToPlainText, sanitizeEmailHtml, toSnippet } from '../messages/content/html-content';
 import {
+  isTrashed,
   MessagesService,
   type ReplyContext,
   toAttachmentInfos,
@@ -203,8 +204,12 @@ export class ScheduledMessagesService {
         reply,
       });
 
+      // Un borrador en la Papelera (se "borró" desde Gmail) no se reutiliza:
+      // editarlo es decir "mandalo igual", así que va uno nuevo fuera de la
+      // Papelera (con los adjuntos copiados del viejo) y el viejo se elimina.
+      const trashed = isTrashed(draft ?? undefined);
       let draftId: string;
-      if (!moving && draft && row.gmailDraftId) {
+      if (!moving && draft && !trashed && row.gmailDraftId) {
         draftId = row.gmailDraftId;
         await this.messages.updateDraft(targetApis, draftId, raw, reply?.threadId);
       } else {

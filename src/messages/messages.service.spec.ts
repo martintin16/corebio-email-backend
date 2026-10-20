@@ -568,6 +568,28 @@ describe('MessagesService', () => {
       );
     });
 
+    it('isDraftTrashed mira la etiqueta TRASH del mensaje del borrador', async () => {
+      gmail.users.drafts.get.mockResolvedValue({
+        data: { id: 'r-draft1', message: { id: 'm1', labelIds: ['DRAFT', 'TRASH'] } },
+      });
+      expect(await service.isDraftTrashed(await apis(), 'r-draft1')).toBe(true);
+      expect(gmail.users.drafts.get).toHaveBeenCalledWith({
+        userId: 'me',
+        id: 'r-draft1',
+        format: 'minimal',
+      });
+
+      gmail.users.drafts.get.mockResolvedValue({
+        data: { id: 'r-draft1', message: { id: 'm1', labelIds: ['DRAFT'] } },
+      });
+      expect(await service.isDraftTrashed(await apis(), 'r-draft1')).toBe(false);
+
+      gmail.users.drafts.get.mockRejectedValue({ status: 404 });
+      await expect(service.isDraftTrashed(await apis(), 'r-draft1')).rejects.toThrow(
+        new NotFoundException(DRAFT_NOT_FOUND),
+      );
+    });
+
     it('resolveReply arma destinatario, asunto y encabezados del hilo', async () => {
       expect(await service.resolveReply(await apis(), 'msg00001')).toEqual({
         to: '"Ana" <ana@x.com>',

@@ -30,7 +30,7 @@ describe('ScheduledSenderService', () => {
   let rows: ClaimedRow[];
   let profileStatus: string | undefined;
   let dataSource: { query: jest.Mock };
-  let messages: { sendDraft: jest.Mock };
+  let messages: { sendDraft: jest.Mock; isDraftTrashed: jest.Mock };
   let google: { forMailbox: jest.Mock };
   let access: { hasPermission: jest.Mock };
   let config: { get: jest.Mock };
@@ -57,6 +57,7 @@ describe('ScheduledSenderService', () => {
     };
     messages = {
       sendDraft: jest.fn().mockResolvedValue({ messageId: 'sent0001', threadId: 'thr1' }),
+      isDraftTrashed: jest.fn().mockResolvedValue(false),
     };
     google = { forMailbox: jest.fn((mailboxId: string) => Promise.resolve({ mailboxId })) };
     access = { hasPermission: jest.fn().mockResolvedValue(true) };
@@ -114,6 +115,28 @@ describe('ScheduledSenderService', () => {
     google.forMailbox.mockRejectedValue(new MailboxNeedsReconnectException());
     await sender.tick();
     expect(lastUpdate()[1]).toEqual(['sch-1', ERRORS.needsReconnect]);
+  });
+
+  it('antes de enviar revisa que el borrador no esté en la Papelera', async () => {
+    await sender.tick();
+    expect(messages.isDraftTrashed).toHaveBeenCalledWith({ mailboxId: MBX }, 'r-draft1');
+    expect(messages.sendDraft).toHaveBeenCalled();
+  });
+
+  it('borrador en la Papelera (se borró desde Gmail) → failed sin enviar', async () => {
+    messages.isDraftTrashed.mockResolvedValue(true);
+    await sender.tick();
+    expect(messages.sendDraft).not.toHaveBeenCalled();
+    const [sql, params] = lastUpdate();
+    expect(sql).toContain("status = 'failed'");
+    expect(params).toEqual(['sch-1', ERRORS.draftTrashed]);
+  });
+
+  it('borrador eliminado para siempre (404 al revisarlo) → failed sin enviar', async () => {
+    messages.isDraftTrashed.mockRejectedValue(new NotFoundException());
+    await sender.tick();
+    expect(messages.sendDraft).not.toHaveBeenCalled();
+    expect(lastUpdate()[1]).toEqual(['sch-1', ERRORS.draftMissing]);
   });
 
   it('borrador que ya no existe → failed (nunca duplica el envío)', async () => {

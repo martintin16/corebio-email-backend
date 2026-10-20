@@ -409,6 +409,29 @@ describe('ScheduledMessagesService', () => {
       expect(messages.deleteDraft).not.toHaveBeenCalled();
     });
 
+    it('borrador en la Papelera: crea uno nuevo con los adjuntos del viejo y borra el viejo', async () => {
+      const trashed = { ...draftMessage, labelIds: ['DRAFT', 'TRASH'] };
+      messages.getDraftMessage.mockResolvedValue(trashed);
+      await service.update(USER, SCH, { subject: 'Mandalo igual' });
+
+      expect(messages.collectAttachments).toHaveBeenCalledWith(
+        { mailboxId: MBX },
+        expect.objectContaining({
+          kept: { apis: { mailboxId: MBX }, message: trashed, partIds: ['1'] },
+        }),
+      );
+      expect(messages.updateDraft).not.toHaveBeenCalled();
+      expect(messages.createDraft).toHaveBeenCalledWith(
+        { mailboxId: MBX },
+        Buffer.from('raw'),
+        undefined,
+      );
+      expect(messages.deleteDraft).toHaveBeenCalledWith({ mailboxId: MBX }, 'r-draft1');
+      const saved = repo.save.mock.calls[0][0] as ScheduledMessage;
+      expect(saved.gmailDraftId).toBe('r-new');
+      expect(saved.status).toBe('pending');
+    });
+
     it('mover de casilla: borrador nuevo en la otra, se borra el viejo', async () => {
       await service.update(USER, SCH, { mailboxId: MBX2 });
       expect(messages.createDraft).toHaveBeenCalledWith(

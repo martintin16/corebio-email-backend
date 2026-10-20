@@ -450,6 +450,27 @@ export class MessagesService {
     return draft.message;
   }
 
+  /**
+   * Si el borrador está en la Papelera. Borrarlo con el tachito desde Gmail no
+   * lo elimina: va a la Papelera, sigue existiendo para la API y `drafts.send`
+   * lo enviaría igual. 404 si ya no existe (se eliminó para siempre o se envió).
+   */
+  async isDraftTrashed(apis: MailboxGoogleApis, draftId: string): Promise<boolean> {
+    const draft = await this.call(
+      apis.mailboxId,
+      async () => {
+        const { data } = await apis.gmail.users.drafts.get({
+          userId: 'me',
+          id: draftId,
+          format: 'minimal',
+        });
+        return data;
+      },
+      DRAFT_NOT_FOUND,
+    );
+    return isTrashed(draft.message ?? undefined);
+  }
+
   /** Envía un borrador. 404 si ya no existe (alguien lo envió o borró desde Gmail). */
   async sendDraft(
     apis: MailboxGoogleApis,
@@ -576,6 +597,11 @@ export class MessagesService {
       return this.google.handleGoogleError(mailboxId, err);
     }
   }
+}
+
+/** Si el mensaje (o borrador) está en la Papelera de Gmail. */
+export function isTrashed(message: GmailMessage | undefined): boolean {
+  return (message?.labelIds ?? []).includes('TRASH');
 }
 
 function dedupeRefs(refs: ForwardedAttachmentRef[]): ForwardedAttachmentRef[] {

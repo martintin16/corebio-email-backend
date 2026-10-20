@@ -616,8 +616,14 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
   pueden pesar 20 MB y Gmail ya los guarda, sin costo ni infraestructura nueva. Además
   enviar un borrador es idempotente: si Gmail ya lo mandó, el borrador no existe más y un
   reintento falla en vez de duplicar el mail. Contra: el borrador se ve en la carpeta
-  Borradores de la casilla; si alguien lo envía o lo borra desde Gmail, el programado queda
-  `failed` ("el borrador ya no existe… revisá Enviados").
+  Borradores de la casilla. **Si alguien lo toca desde Gmail:**
+  - lo borra con el tachito → el borrador va a la Papelera, pero para la API sigue
+    existiendo y `drafts.send` lo enviaría igual. Por eso, antes de enviar, el job revisa
+    la etiqueta `TRASH`: si está, queda `failed` ("se eliminó desde Gmail… editalo y se
+    vuelve a programar"). Editarlo crea un borrador nuevo fuera de la Papelera (con los
+    adjuntos copiados del viejo) y elimina el viejo;
+  - lo elimina para siempre o lo envía a mano → el borrador ya no existe (404) y queda
+    `failed` ("el borrador ya no existe… revisá Enviados").
 - **Estados**: `pending` → `sending` → `sent`, o `failed` con `lastError`. Los `sent` no
   aparecen en la lista (ya están en Enviados). Editar uno `failed` lo vuelve a `pending`; si
   no se le cambia la fecha y ya pasó, sale en la próxima vuelta (sirve de "reintentar").
@@ -656,6 +662,9 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
   después en Enviados), editar antes de la hora (cambia el borrador), cancelar (desaparece
   el borrador), programar una respuesta (queda en el hilo), y borrar el borrador desde
   Gmail antes de la hora (queda `failed` con el motivo).
+- ❌→ corregido: borrar el borrador con el tachito lo manda a la Papelera, donde sigue
+  existiendo para la API, y el programado se enviaba igual. Ahora se revisa `TRASH` antes de
+  enviar (ver Decisiones).
 
 ### ⏳ Pendiente
 

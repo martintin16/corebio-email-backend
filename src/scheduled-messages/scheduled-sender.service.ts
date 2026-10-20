@@ -28,6 +28,9 @@ export const STUCK_AFTER_MINUTES = 10;
 export const ERRORS = {
   noPermission: 'Quien lo programó ya no tiene permiso para enviar desde esta casilla',
   needsReconnect: 'La casilla necesita reconectarse con Google',
+  draftTrashed:
+    'El borrador se eliminó desde Gmail (está en la Papelera), así que no se envió. ' +
+    'Si querés mandarlo igual, editalo y se vuelve a programar.',
   draftMissing:
     'El borrador ya no existe en Gmail (¿se envió o se borró desde Gmail?). Revisá Enviados.',
   noDraft: 'No hay borrador para enviar',
@@ -141,6 +144,11 @@ export class ScheduledSenderService implements OnApplicationBootstrap, OnModuleD
       if (!(await this.responsibleCanSend(row))) return await this.fail(row, ERRORS.noPermission);
 
       const apis = await this.google.forMailbox(row.mailbox_id);
+      // Un borrador "borrado" desde Gmail va a la Papelera y drafts.send lo
+      // enviaría igual: si está ahí, la persona quiso cancelarlo.
+      if (await this.messages.isDraftTrashed(apis, row.gmail_draft_id)) {
+        return await this.fail(row, ERRORS.draftTrashed);
+      }
       const sent = await this.messages.sendDraft(apis, row.gmail_draft_id);
       await this.dataSource.query(
         `UPDATE public.scheduled_messages
