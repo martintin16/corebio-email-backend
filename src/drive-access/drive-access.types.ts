@@ -5,8 +5,13 @@ export interface DriveItem {
   type: 'folder' | 'file';
   /** La carpeta pedida ("root" para Mi unidad). */
   parentId: string | null;
-  /** Si la persona pedida (`userId`) ya tiene acceso a este ítem hoy. */
+  /** Si está compartido DIRECTAMENTE con la persona pedida (`userId`): se muestra tildado. */
   shared: boolean;
+  /**
+   * La persona tiene acceso solo porque está dentro de una carpeta compartida
+   * (se ve sin tildar; para quitárselo hay que dejar de compartir la carpeta).
+   */
+  inherited: boolean;
 }
 
 export interface DriveAccessFailure {

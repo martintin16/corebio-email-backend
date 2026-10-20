@@ -10,7 +10,7 @@ import {
   MailboxNeedsReconnectException,
 } from '../google/google-mailbox-client';
 import type { MailboxAccessService } from '../mailboxes/mailbox-access.service';
-import { DriveAccessService, SHARE_ROLE } from './drive-access.service';
+import { DriveAccessService, INHERITED_REASON, SHARE_ROLE } from './drive-access.service';
 import {
   driveAccountEmail,
   driveQueryValue,
@@ -54,7 +54,7 @@ describe('DriveAccessService', () => {
   let service: DriveAccessService;
 
   /** Respuesta de files.list según la consulta: "compartidos" o contenido de carpeta. */
-  let sharedFiles: { id: string; name: string; mimeType: string }[];
+  let sharedFiles: { id: string; name: string; mimeType: string; parents?: string[] }[];
   let folderFiles: { id: string; name: string; mimeType: string }[];
 
   beforeEach(() => {
@@ -115,13 +115,21 @@ describe('DriveAccessService', () => {
     it('lista la carpeta con "shared" según la persona y sin la papelera', async () => {
       const items = await service.listItems(MBX, FOLDER, USER);
       expect(items).toEqual([
-        { id: 'f_folder', name: 'Balances', type: 'folder', parentId: FOLDER, shared: false },
+        {
+          id: 'f_folder',
+          name: 'Balances',
+          type: 'folder',
+          parentId: FOLDER,
+          shared: false,
+          inherited: false,
+        },
         {
           id: 'file_shared',
           name: 'Compartido.xlsx',
           type: 'file',
           parentId: FOLDER,
           shared: true,
+          inherited: false,
         },
       ]);
       const queries = drive.files.list.mock.calls.map(([p]: [{ q: string }]) => p.q);
@@ -253,6 +261,115 @@ describe('DriveAccessService', () => {
         BadRequestException,
       );
     });
+  });
+
+  describe('permisos heredados de una carpeta', () => {
+    /** La carpeta compartida y dos archivos adentro (Drive los devuelve a todos). */
+    beforeEach(() => {
+      sharedFiles = [
+        { id: 'carpeta', name: 'Carpeta', mimeType: 'application/vnd.google-apps.folder' },
+        { id: 'hijo', name: 'Hijo.pdf', mimeType: 'x', parents: ['carpeta'] },
+        { id: 'propio', name: 'Propio.pdf', mimeType: 'x', parents: ['carpeta'] },
+      ] as typeof sharedFiles;
+      folderFiles = sharedFiles.slice(1);
+      drive.permissions.list.mockImplementation(({ fileId }: { fileId: string }) => {
+        const details =
+          fileId === 'propio'
+            ? [{ inherited: true }, { inherited: false }]
+            : fileId === 'hijo'
+              ? [{ inherited: true }]
+              : [{ inherited: false }];
+        return Promise.resolve({
+          data: {
+            permissions: [
+              { id: 'owner', type: 'user', role: 'owner', emailAddress: 'casilla@gmail.com' },
+              {
+                id: `p-${fileId}`,
+                type: 'user',
+                role: 'writer',
+                emailAddress: 'ana@gmail.com',
+                permissionDetails: details,
+              },
+            ],
+          },
+        });
+      });
+    });
+
+    it('lo que hereda no cuenta como compartido; lo que tiene permiso propio, sí', async () => {
+      expect(await service.listSharedIds(MBX, USER)).toEqual(
+        expect.arrayContaining(['carpeta', 'propio']),
+      );
+      expect(await service.listSharedIds(MBX, USER)).not.toContain('hijo');
+      // Solo se piden permisos de los que están dentro de una carpeta de la lista.
+      const asked = drive.permissions.list.mock.calls.map(([p]: [{ fileId: string }]) => p.fileId);
+      expect(asked).not.toContain('carpeta');
+    });
+
+    it('el explorador marca el heredado como inherited (sin tildar)', async () => {
+      const items = await service.listItems(MBX, 'carpeta', USER);
+      expect(items.find((i) => i.id === 'hijo')).toEqual(
+        expect.objectContaining({ shared: false, inherited: true }),
+      );
+      expect(items.find((i) => i.id === 'propio')).toEqual(
+        expect.objectContaining({ shared: true, inherited: false }),
+      );
+    });
+
+    it('sin permissionDetails, uno de adentro de una carpeta compartida se toma como heredado', async () => {
+      drive.permissions.list.mockResolvedValue({
+        data: {
+          permissions: [
+            { id: 'pAna', type: 'user', role: 'writer', emailAddress: 'ana@gmail.com' },
+          ],
+        },
+      });
+      expect(await service.listSharedIds(MBX, USER)).toEqual(['carpeta']);
+    });
+
+    it('dejar de compartir la carpeta no intenta quitar los heredados', async () => {
+      const result = await service.applyAccess(MBX, USER, ['propio']);
+      expect(result).toEqual({ added: [], removed: ['carpeta'], failed: [] });
+      expect(drive.permissions.delete).toHaveBeenCalledTimes(1);
+      expect(drive.permissions.delete).toHaveBeenCalledWith({
+        fileId: 'carpeta',
+        permissionId: 'p-carpeta',
+      });
+    });
+
+    it('si Google igual dice "inherited", el motivo es claro y trae el nombre', async () => {
+      drive.permissions.delete.mockRejectedValue(
+        new Error(
+          'The authenticated user cannot delete the permission. If the permission is inherited, it must be removed from the parent.',
+        ),
+      );
+      const result = await service.applyAccess(MBX, USER, ['carpeta']);
+      expect(result.failed).toEqual([
+        { id: 'propio', name: 'Propio.pdf', reason: INHERITED_REASON },
+      ]);
+    });
+
+    it('en la revocación automática, un heredado no cuenta como falla', async () => {
+      drive.permissions.delete.mockImplementation(({ fileId }: { fileId: string }) =>
+        fileId === 'propio'
+          ? Promise.reject(new Error('cannot delete: the permission is inherited'))
+          : Promise.resolve({ data: {} }),
+      );
+      expect(await service.revokeAllForEmail(MBX, 'ana@gmail.com')).toEqual({
+        mailboxId: MBX,
+        removed: 1,
+        failed: 0,
+        error: null,
+      });
+    });
+  });
+
+  it('el motivo de un error de Google va completo', async () => {
+    sharedFiles = [];
+    const long = `Bad Request: ${'x'.repeat(300)} (detalle)`;
+    drive.permissions.create.mockRejectedValue(new Error(long));
+    const result = await service.applyAccess(MBX, USER, ['x1']);
+    expect(result.failed[0].reason).toBe(`Google rechazó el cambio: ${long}`);
   });
 
   describe('revocación automática', () => {

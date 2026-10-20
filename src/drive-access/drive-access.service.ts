@@ -37,6 +37,20 @@ const DRIVE_CONCURRENCY = 3;
 /** Tope de páginas al listar (1000 ítems por página). */
 const MAX_PAGES = 10;
 
+/** Lo compartido con una cuenta, separado en directo y heredado de una carpeta. */
+interface SharedState {
+  /** Ítems con un permiso propio para esa cuenta (los que se tildan). */
+  direct: Map<string, string | null>;
+  /** Ítems a los que llega solo por estar dentro de una carpeta compartida. */
+  inherited: Set<string>;
+}
+
+/** Falla al quitar un permiso; `inherited` = el permiso viene de una carpeta. */
+type UnshareFailure = DriveAccessFailure & { inherited?: boolean };
+
+export const INHERITED_REASON =
+  'Tiene acceso por la carpeta que lo contiene: para quitárselo, dejá de compartir esa carpeta';
+
 interface TargetUser {
   id: string;
   email: string;
@@ -66,17 +80,19 @@ export class DriveAccessService {
   // Explorador (admin)
   // ---------------------------------------------------------------------------
 
-  /** Contenido de una carpeta, con `shared` según la persona pedida. */
+  /**
+   * Contenido de una carpeta. `shared` = compartido directamente con la persona;
+   * `inherited` = tiene acceso solo por estar dentro de una carpeta compartida.
+   */
   async listItems(mailboxId: string, folderId: string, userId: string): Promise<DriveItem[]> {
     const user = await this.targetUser(mailboxId, userId);
     const apis = await this.google.forMailbox(mailboxId);
     const inFolder = `${driveQueryValue(folderId)} in parents and trashed = false`;
 
-    const [files, shared] = await Promise.all([
+    const [files, state] = await Promise.all([
       this.listAll(apis, inFolder, 'folder,name_natural'),
-      this.listAll(apis, `${inFolder} and 'me' in owners and ${sharedWithClause(user.email)}`),
+      this.sharedState(apis, user.email),
     ]);
-    const sharedIds = new Set(shared.map((f) => f.id));
 
     return files
       .filter((f): f is drive_v3.Schema$File & { id: string } => Boolean(f.id))
@@ -85,15 +101,16 @@ export class DriveAccessService {
         name: f.name ?? '(sin nombre)',
         type: f.mimeType === FOLDER_MIME ? 'folder' : 'file',
         parentId: folderId,
-        shared: sharedIds.has(f.id),
+        shared: state.direct.has(f.id),
+        inherited: !state.direct.has(f.id) && state.inherited.has(f.id),
       }));
   }
 
-  /** Ids de todo lo que la persona tiene compartido en el Drive de la casilla. */
+  /** Ids de lo compartido DIRECTAMENTE con la persona en el Drive de la casilla. */
   async listSharedIds(mailboxId: string, userId: string): Promise<string[]> {
     const user = await this.targetUser(mailboxId, userId);
     const apis = await this.google.forMailbox(mailboxId);
-    return this.sharedIds(apis, user.email);
+    return [...(await this.sharedState(apis, user.email)).direct.keys()];
   }
 
   // ---------------------------------------------------------------------------
@@ -120,9 +137,9 @@ export class DriveAccessService {
     }
 
     const desired = new Set(itemIds);
-    const current = new Set(await this.sharedIds(apis, user.email));
+    const current = (await this.sharedState(apis, user.email)).direct;
     const toAdd = [...desired].filter((id) => !current.has(id));
-    const toRemove = [...current].filter((id) => !desired.has(id));
+    const toRemove = [...current.keys()].filter((id) => !desired.has(id));
 
     const failed: DriveAccessFailure[] = [];
     const added = (
@@ -134,8 +151,8 @@ export class DriveAccessService {
     ).filter((id): id is string => id !== null);
     const removed = (
       await mapWithConcurrency(toRemove, DRIVE_CONCURRENCY, async (id) => {
-        const failure = await this.unshare(apis, id, user.email);
-        if (failure) failed.push(failure);
+        const failure = await this.unshare(apis, id, current.get(id) ?? null, user.email);
+        if (failure) failed.push(withoutKind(failure));
         return failure ? null : id;
       })
     ).filter((id): id is string => id !== null);
@@ -158,12 +175,14 @@ export class DriveAccessService {
     try {
       const apis = await this.google.forMailbox(mailboxId);
       if (sameDriveAccount(email, apis.email)) return result;
-      const ids = await this.sharedIds(apis, email);
-      const failures = await mapWithConcurrency(ids, DRIVE_CONCURRENCY, (id) =>
-        this.unshare(apis, id, email),
+      const direct = [...(await this.sharedState(apis, email)).direct];
+      const failures = await mapWithConcurrency(direct, DRIVE_CONCURRENCY, ([id, name]) =>
+        this.unshare(apis, id, name, email),
       );
-      result.failed = failures.filter(Boolean).length;
-      result.removed = ids.length - result.failed;
+      // Un permiso heredado no es una falla: se va junto con la carpeta, que
+      // también está en la lista.
+      result.failed = failures.filter((f) => f !== null && !f.inherited).length;
+      result.removed = failures.filter((f) => f === null).length;
     } catch (err) {
       result.error = err instanceof Error ? err.message : String(err);
     }
@@ -199,9 +218,57 @@ export class DriveAccessService {
     return user;
   }
 
-  private async sharedIds(apis: MailboxGoogleApis, email: string): Promise<string[]> {
-    const files = await this.listAll(apis, `'me' in owners and ${sharedWithClause(email)}`);
-    return files.map((f) => f.id).filter((id): id is string => Boolean(id));
+  /**
+   * Lo que la cuenta tiene compartido en ítems de la casilla, separando lo
+   * directo de lo heredado. La búsqueda de Drive (`in writers / in readers`)
+   * devuelve las dos cosas: el contenido de una carpeta compartida también
+   * aparece. Un ítem cuya carpeta también está en la lista probablemente
+   * hereda: solo para esos se piden los permisos y se mira `permissionDetails`.
+   * Si Google no lo informa (en Mi unidad no siempre viene), se toma como heredado.
+   */
+  private async sharedState(apis: MailboxGoogleApis, email: string): Promise<SharedState> {
+    const files = (
+      await this.listAll(apis, `'me' in owners and ${sharedWithClause(email)}`)
+    ).filter((f): f is drive_v3.Schema$File & { id: string } => Boolean(f.id));
+    const ids = new Set(files.map((f) => f.id));
+
+    const direct = new Map<string, string | null>();
+    const inherited = new Set<string>();
+    const suspects = files.filter((f) => (f.parents ?? []).some((p) => ids.has(p)));
+    for (const f of files) if (!suspects.includes(f)) direct.set(f.id, f.name ?? null);
+
+    await mapWithConcurrency(suspects, DRIVE_CONCURRENCY, async (f) => {
+      let permissions: drive_v3.Schema$Permission[];
+      try {
+        permissions = await this.accountPermissions(apis, f.id, email);
+      } catch (err) {
+        if (isGmailNotFound(err)) return; // se borró mientras tanto
+        return this.google.handleGoogleError(apis.mailboxId, err);
+      }
+      if (permissions.some(isDirectPermission)) direct.set(f.id, f.name ?? null);
+      else inherited.add(f.id);
+    });
+    return { direct, inherited };
+  }
+
+  /** Los permisos de la cuenta sobre un ítem (sin el de dueño). */
+  private async accountPermissions(
+    apis: MailboxGoogleApis,
+    fileId: string,
+    email: string,
+  ): Promise<drive_v3.Schema$Permission[]> {
+    const { data } = await apis.drive.permissions.list({
+      fileId,
+      fields: 'permissions(id, emailAddress, role, type, permissionDetails(inherited))',
+    });
+    return (data.permissions ?? []).filter(
+      (p) =>
+        p.id &&
+        p.type === 'user' &&
+        p.role !== 'owner' &&
+        p.emailAddress &&
+        sameDriveAccount(p.emailAddress, email),
+    );
   }
 
   private async listAll(
@@ -220,7 +287,7 @@ export class DriveAccessService {
             orderBy,
             pageSize: 1000,
             pageToken,
-            fields: 'nextPageToken, files(id, name, mimeType)',
+            fields: 'nextPageToken, files(id, name, mimeType, parents)',
             spaces: 'drive',
           });
           files.push(...(data.files ?? []));
@@ -266,31 +333,31 @@ export class DriveAccessService {
     }
   }
 
-  /** Quita los permisos de la cuenta sobre un ítem (nunca el de dueño). */
+  /**
+   * Quita los permisos PROPIOS de la cuenta sobre un ítem (nunca el de dueño ni
+   * uno heredado de una carpeta, que Google no deja borrar).
+   */
   private async unshare(
     apis: MailboxGoogleApis,
     fileId: string,
+    name: string | null,
     email: string,
-  ): Promise<DriveAccessFailure | null> {
+  ): Promise<UnshareFailure | null> {
     try {
-      const { data } = await apis.drive.permissions.list({
-        fileId,
-        fields: 'permissions(id, emailAddress, role, type)',
-      });
-      const mine = (data.permissions ?? []).filter(
-        (p) =>
-          p.id &&
-          p.type === 'user' &&
-          p.role !== 'owner' &&
-          p.emailAddress &&
-          sameDriveAccount(p.emailAddress, email),
-      );
-      for (const permission of mine) {
+      const permissions = await this.accountPermissions(apis, fileId, email);
+      const own = permissions.filter((p) => !isInheritedOnly(p));
+      if (own.length === 0 && permissions.length > 0) {
+        return { id: fileId, name, reason: INHERITED_REASON, inherited: true };
+      }
+      for (const permission of own) {
         await apis.drive.permissions.delete({ fileId, permissionId: permission.id ?? '' });
       }
       return null;
     } catch (err) {
-      return this.itemFailure(apis, fileId, null, err);
+      if (isInheritedPermissionError(err)) {
+        return { id: fileId, name, reason: INHERITED_REASON, inherited: true };
+      }
+      return this.itemFailure(apis, fileId, name, err);
     }
   }
 
@@ -324,10 +391,31 @@ export class DriveAccessService {
   }
 }
 
-/** Mensaje corto de un error de Google para mostrar junto al ítem. */
+/** El mensaje de Google, completo, para mostrar junto al ítem. */
 function googleReason(err: unknown): string {
-  const message = err instanceof Error ? err.message : '';
-  return message
-    ? `Google rechazó el cambio: ${message.slice(0, 200)}`
-    : 'Google rechazó el cambio';
+  const message = err instanceof Error ? err.message.trim() : '';
+  return message ? `Google rechazó el cambio: ${message}` : 'Google rechazó el cambio';
+}
+
+/** Google informa que el permiso es (al menos en parte) propio del ítem. */
+function isDirectPermission(p: drive_v3.Schema$Permission): boolean {
+  return (p.permissionDetails ?? []).some((d) => d.inherited === false);
+}
+
+/**
+ * Permiso que viene solo de una carpeta. Sin `permissionDetails` no se sabe:
+ * se intenta borrar y, si Google dice que es heredado, se trata como tal.
+ */
+function isInheritedOnly(p: drive_v3.Schema$Permission): boolean {
+  const details = p.permissionDetails ?? [];
+  return details.length > 0 && details.every((d) => d.inherited === true);
+}
+
+/** "The authenticated user cannot delete the permission. If the permission is inherited…" */
+function isInheritedPermissionError(err: unknown): boolean {
+  return err instanceof Error && /inherited/i.test(err.message);
+}
+
+function withoutKind(failure: UnshareFailure): DriveAccessFailure {
+  return { id: failure.id, name: failure.name, reason: failure.reason };
 }

@@ -198,8 +198,8 @@ Códigos de respuesta:
 | `GET /templates/:id` | `canSend` en su casilla | 6 | `MessageTemplate` (404 si no tiene `canSend`) |
 | `PATCH /templates/:id` | `canSend` en su casilla | 6 | `{ name?, subject?, body? }` (`subject: null` lo quita) → `MessageTemplate` |
 | `DELETE /templates/:id` | `canSend` en su casilla | 6 | Borra → 204 |
-| `GET /mailboxes/:id/drive/items?userId=…&folderId=root` | admin | 7 | Contenido de una carpeta del Drive de la casilla → `DriveItem[]` (`shared` según esa persona) |
-| `GET /mailboxes/:id/drive/shared?userId=…` | admin | 7 | Ids de todo lo que la persona ya tiene compartido en ese Drive |
+| `GET /mailboxes/:id/drive/items?userId=…&folderId=root` | admin | 7 | Contenido de una carpeta del Drive de la casilla → `DriveItem[]` (`shared` = compartido directamente con esa persona; `inherited` = accede por una carpeta) |
+| `GET /mailboxes/:id/drive/shared?userId=…` | admin | 7 | Ids de lo compartido directamente con la persona en ese Drive |
 | `PUT /mailboxes/:id/drive/access/:userId` | admin | 7 | `{ itemIds }` (selección final) → comparte lo nuevo como Editor y quita lo destildado → `{ added, removed, failed }` |
 | `GET /users` | admin | 2 | `AdminUser[]` |
 | `POST /users` | admin | 2 | `{ name, email, role, access }` → invita y devuelve `AdminUser` (201; 409 si el email existe) |
@@ -735,9 +735,16 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
 **Decisiones**
 - **Se comparte como Editor** (decisión de la fase): hoy todos entran con la contraseña y
   tienen acceso total; con Lector se cortarían usos normales. El front no tiene selector.
-- **Drive es la fuente de verdad, sin tabla propia**: "compartido" = esa cuenta tiene acceso
-  de lectura o edición al ítem en Drive. Lo compartido a mano desde Drive también aparece
-  tildado, y destildarlo en la app lo quita.
+- **Drive es la fuente de verdad, sin tabla propia**: "compartido" = esa cuenta tiene un
+  permiso **propio** (lectura o edición) sobre el ítem en Drive. Lo compartido a mano desde
+  Drive también aparece tildado, y destildarlo en la app lo quita.
+- **Permisos heredados**: el contenido de una carpeta compartida también figura en Drive con
+  acceso para esa persona, pero heredado (Google no deja borrarlo: se va con la carpeta).
+  Esos ítems vienen `shared: false, inherited: true` (sin tildar) y nunca se intenta
+  quitarlos. Para distinguirlos: un ítem cuya carpeta también está compartida se revisa con
+  `permissionDetails`; si Google no lo informa (en Mi unidad no siempre viene), se toma como
+  heredado. Si igual Google responde "inherited" al quitar, el motivo dice que hay que dejar
+  de compartir la carpeta, y en la revocación automática no cuenta como falla.
 - **Solo se tocan ítems de los que la casilla es dueña** (`'me' in owners`): nunca se le quita
   a nadie un acceso que le dio otra persona, ni el permiso de dueño.
 - **La persona tiene que tener acceso a la casilla en la app** (si no, 400) y estar activa
@@ -760,14 +767,20 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
 **Cambios de contrato con el frontend (para la mini-fase front↔back)**
 - `shared` y "lo ya compartido" son **por persona**: el explorador y `getDriveSharedItemIds`
   tienen que mandar `userId` (en el mock no dependían de la persona).
+- `DriveItem` suma `inherited`: mostrar esos ítems sin tildar con un "acceso por carpeta".
 - `updateDriveAccess` → `PUT /mailboxes/:id/drive/access/:userId` con `{ itemIds }`; mostrar
   los `failed` con su motivo en vez de un "ok" a secas.
 
 **Verificación**
-- A correr: `lint`, `typecheck`, `test`, `test:e2e` (no hay migración en esta fase).
-- A verificar contra Drive: explorar carpetas, compartir una carpeta y un archivo (le llega el
-  mail de Google y aparece como Editor), destildar (se le quita), y que quitarle la casilla a
-  la persona le quite lo compartido.
+- ✅ `lint`, `typecheck`, `test` (362), `test:e2e` (143). No hay migración en esta fase.
+- ✅ Contra Drive (con una cuenta de Gmail real, rol user con `canRead` en Tesorería):
+  explorar Mi unidad y una carpeta, compartir carpeta + archivo (llegan los mails de Google y
+  queda como Editor), `/drive/shared`, archivo en la papelera → `failed` "Está en la
+  papelera", quitar la casilla en permisos revoca el acceso, usuario común → 403.
+- ❌→ corregido: el contenido de una carpeta compartida contaba como compartido (la búsqueda
+  de Drive devuelve también lo heredado); en cada guardado y en la revocación se intentaba
+  borrar ese permiso heredado y Google lo rechazaba (errores falsos en `failed`, con el motivo
+  cortado y sin nombre). Ahora se separa directo de heredado (ver Decisiones).
 
 ### ⏳ Pendiente
 
