@@ -234,7 +234,7 @@ describe('Messages (e2e)', () => {
       ['email inválido', { to: 'no-es-email', subject: 's', body: '<p>x</p>' }],
       ['asunto vacío', { to: 'a@b.com', subject: '  ', body: '<p>x</p>' }],
       ['cuerpo vacío del editor', { to: 'a@b.com', subject: 's', body: '<p></p>' }],
-      ['campo de más', { to: 'a@b.com', subject: 's', body: '<p>x</p>', cc: 'c@d.com' }],
+      ['campo de más', { to: 'a@b.com', subject: 's', body: '<p>x</p>', foo: 1 }],
       [
         'mailboxId que no es uuid',
         { mailboxId: 'mbx_1', to: 'a@b.com', subject: 's', body: '<p>x</p>' },

@@ -41,7 +41,7 @@ export class CreateScheduledMessageDto {
   @Transform(trimString)
   @IsRecipientList()
   @HasAnyRecipient()
-  to = '';
+  to?: string = '';
 
   @IsOptional()
   @Transform(trimString)

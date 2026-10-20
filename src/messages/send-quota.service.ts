@@ -49,7 +49,7 @@ export function isGmailSendingLimitError(err: unknown): boolean {
     response?: { data?: { error?: { errors?: { reason?: unknown }[] } } };
   };
   const reasons = [...(e.errors ?? []), ...(e.response?.data?.error?.errors ?? [])].map((x) =>
-    String(x.reason ?? ''),
+    typeof x.reason === 'string' ? x.reason : '',
   );
   return (
     reasons.includes('dailyLimitExceeded') ||

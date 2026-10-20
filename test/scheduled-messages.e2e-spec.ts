@@ -159,7 +159,7 @@ describe('Scheduled messages (e2e)', () => {
       ['mailboxId que no es uuid', { mailboxId: 'mbx_1' }],
       ['cuerpo vacío', { body: '<p> </p>' }],
       ['replyToMessageId inválido', { replyToMessageId: '../x' }],
-      ['campo de más', { cc: 'c@d.com' }],
+      ['campo de más', { foo: 1 }],
     ])('400 con %s', async (_case, patch) => {
       await http()
         .post('/scheduled-messages')
