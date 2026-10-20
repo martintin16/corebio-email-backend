@@ -32,6 +32,8 @@ function mailbox(overrides: Partial<Mailbox> = {}): Mailbox {
 
 describe('MailboxConnectionService', () => {
   let found: Mailbox | null;
+  /** Casillas con credenciales guardadas (lo que consulta isAccountInUse). */
+  let connected: { id: string; email: string }[];
   let repo: {
     findOneBy: jest.Mock;
     update: jest.Mock;
@@ -57,10 +59,13 @@ describe('MailboxConnectionService', () => {
 
   beforeEach(() => {
     found = mailbox();
+    connected = [];
     const qb = {
       addSelect: jest.fn().mockReturnThis(),
+      select: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
       getOne: jest.fn(() => Promise.resolve(found)),
+      getMany: jest.fn(() => Promise.resolve(connected)),
     };
     repo = {
       findOneBy: jest.fn(() => Promise.resolve(found)),
@@ -203,7 +208,7 @@ describe('MailboxConnectionService', () => {
       expect(repo.update).not.toHaveBeenCalled();
     });
 
-    it('faltan permisos → missing_scopes y se revoca el permiso otorgado', async () => {
+    it('faltan permisos en una primera conexión → missing_scopes y se revoca', async () => {
       oauth.exchangeCode.mockResolvedValue({ ...goodTokens, scopes: [GOOGLE_SCOPES[0]] });
       await expect(service.handleCallback(query)).resolves.toContain(
         'connectionError=missing_scopes',
@@ -212,7 +217,17 @@ describe('MailboxConnectionService', () => {
       expect(repo.update).not.toHaveBeenCalled();
     });
 
-    it('se conectó otra cuenta de Google → wrong_account y se revoca', async () => {
+    it('faltan permisos al RECONECTAR una casilla que ya tenía credenciales → no se revoca', async () => {
+      connected = [{ id: MBX, email: 'casilla.prueba.tesoreria@gmail.com' }];
+      oauth.exchangeCode.mockResolvedValue({ ...goodTokens, scopes: [GOOGLE_SCOPES[0]] });
+      await expect(service.handleCallback(query)).resolves.toContain(
+        'connectionError=missing_scopes',
+      );
+      expect(oauth.revokeToken).not.toHaveBeenCalled();
+      expect(repo.update).not.toHaveBeenCalled();
+    });
+
+    it('otra cuenta que no es de ninguna casilla → wrong_account y se revoca', async () => {
       oauth.getAccountEmail.mockResolvedValue('otra.persona@gmail.com');
       await expect(service.handleCallback(query)).resolves.toContain(
         'connectionError=wrong_account',
@@ -221,12 +236,33 @@ describe('MailboxConnectionService', () => {
       expect(repo.update).not.toHaveBeenCalled();
     });
 
-    it('no se pudo leer el email de la cuenta → profile_failed y se revoca', async () => {
+    it('la cuenta equivocada es la de OTRA casilla conectada → wrong_account SIN revocar', async () => {
+      // Caso real: conectar Secretaría con la cuenta de Tesorería. Revocar dejaría a
+      // Tesorería sin credenciales (Google revoca el permiso de toda la cuenta).
+      connected = [{ id: 'otra', email: 'casillapruebasecretaria@gmail.com' }];
+      oauth.getAccountEmail.mockResolvedValue('casilla.prueba.secretaria@gmail.com');
+      await expect(service.handleCallback(query)).resolves.toContain(
+        'connectionError=wrong_account',
+      );
+      expect(oauth.revokeToken).not.toHaveBeenCalled();
+      expect(repo.update).not.toHaveBeenCalled();
+    });
+
+    it('no se pudo leer el email de la cuenta → profile_failed SIN revocar (cuenta desconocida)', async () => {
       oauth.getAccountEmail.mockRejectedValue(new Error('403'));
       await expect(service.handleCallback(query)).resolves.toContain(
         'connectionError=profile_failed',
       );
-      expect(oauth.revokeToken).toHaveBeenCalled();
+      expect(oauth.revokeToken).not.toHaveBeenCalled();
+    });
+
+    it('si faltan permisos y además no se puede leer la cuenta → missing_scopes sin revocar', async () => {
+      oauth.exchangeCode.mockResolvedValue({ ...goodTokens, scopes: [GOOGLE_SCOPES[1]] });
+      oauth.getAccountEmail.mockRejectedValue(new Error('403'));
+      await expect(service.handleCallback(query)).resolves.toContain(
+        'connectionError=missing_scopes',
+      );
+      expect(oauth.revokeToken).not.toHaveBeenCalled();
     });
 
     it('un error inesperado igual termina en redirección (unexpected)', async () => {

@@ -164,10 +164,25 @@ export class MailboxConnectionService {
     if (!tokens.refreshToken) throw new ConnectionFailed('no_refresh_token', mailboxId);
     const refreshToken = tokens.refreshToken;
 
-    // Desde acá, si algo no cierra se revoca el permiso recién otorgado: no queda
-    // un acceso a esa cuenta de Google que no estemos usando.
+    // Se identifica la cuenta antes de decidir nada (puede fallar si, por ejemplo,
+    // la persona destildó el permiso de Gmail).
+    let accountEmail: string | null = null;
+    try {
+      if (tokens.accessToken) accountEmail = await this.oauth.getAccountEmail(tokens.accessToken);
+    } catch {
+      accountEmail = null;
+    }
+
+    // Si algo no cierra, el token recién emitido se descarta. Revocarlo en Google
+    // revoca TODO el permiso de esa cuenta para la app, no solo este token: si la
+    // cuenta ya está conectada como alguna casilla (otra, o esta misma al
+    // reconectar), revocar la dejaría sin credenciales. Por eso solo se revoca
+    // cuando la cuenta es conocida y no pertenece a ninguna casilla conectada; en
+    // cualquier otro caso queda, como mucho, un permiso sin usar en esa cuenta.
     const reject = async (code: ConnectionErrorCode): Promise<never> => {
-      await this.oauth.revokeToken(refreshToken).catch(() => undefined);
+      if (accountEmail && !(await this.isAccountInUse(accountEmail))) {
+        await this.oauth.revokeToken(refreshToken).catch(() => undefined);
+      }
       throw new ConnectionFailed(code, mailboxId);
     };
 
@@ -175,13 +190,7 @@ export class MailboxConnectionService {
     const missing = GOOGLE_SCOPES.filter((scope) => !tokens.scopes.includes(scope));
     if (missing.length > 0) return reject('missing_scopes');
 
-    let accountEmail: string;
-    try {
-      if (!tokens.accessToken) throw new Error('sin access_token');
-      accountEmail = await this.oauth.getAccountEmail(tokens.accessToken);
-    } catch {
-      return reject('profile_failed');
-    }
+    if (!accountEmail) return reject('profile_failed');
 
     // Que la cuenta conectada sea la casilla: si no, `tesoreria@` quedaría leyendo
     // el correo de otra persona.
@@ -199,6 +208,16 @@ export class MailboxConnectionService {
     );
     this.googleClient.invalidate(mailboxId);
     return mailboxId;
+  }
+
+  /** true si la cuenta de Google ya es la de alguna casilla con credenciales guardadas. */
+  private async isAccountInUse(accountEmail: string): Promise<boolean> {
+    const withCredentials = await this.mailboxes
+      .createQueryBuilder('m')
+      .select(['m.id', 'm.email'])
+      .where('m.googleRefreshToken IS NOT NULL')
+      .getMany();
+    return withCredentials.some((m) => sameMailboxAddress(m.email, accountEmail));
   }
 
   private findWithToken(mailboxId: string): Promise<Mailbox | null> {

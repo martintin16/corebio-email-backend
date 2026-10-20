@@ -437,8 +437,15 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
   casilla). Si no, `tesoreria@` quedaría leyendo el correo de otra persona. En Gmail se
   ignoran los puntos y `googlemail.com`.
 - **Se verifican los permisos otorgados**: la pantalla de Google deja destildarlos; sin
-  `gmail.modify` y `drive` la conexión se rechaza. En cualquier rechazo posterior al
-  canje se revoca el permiso recién otorgado.
+  `gmail.modify` y `drive` la conexión se rechaza.
+- **Al rechazar una conexión, el token recién emitido se descarta y solo se revoca si la
+  cuenta de Google es conocida y no pertenece a ninguna casilla con credenciales.**
+  Revocar en Google revoca el permiso de toda la cuenta para la app, no solo ese token.
+  Bug encontrado en la verificación de la Fase 4: conectar Secretaría con la cuenta de
+  Tesorería (`wrong_account`) revocaba el permiso y dejaba a Tesorería sin credenciales.
+  Lo mismo pasaría al reconectar una casilla destildando un permiso (`missing_scopes`).
+  Si la cuenta no se puede identificar, tampoco se revoca: como mucho queda un permiso
+  sin usar en esa cuenta, que se puede quitar desde myaccount.google.com/permissions.
 - **`access_type=offline` + `prompt=consent`**: Google devuelve siempre un refresh_token,
   también al reconectar.
 - **El callback siempre redirige al frontend** (`?connected=` o `?connectionError=<code>`),
