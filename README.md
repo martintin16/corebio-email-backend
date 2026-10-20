@@ -184,12 +184,12 @@ Códigos de respuesta:
 | `GET /mailboxes/:id/messages` | `canRead` | 4·8 | Últimos 25 de Recibidos → `MessageSummary[]` (con `labelIds`). `?labelId=Label_…` → los de esa etiqueta |
 | `GET /mailboxes/:id/labels` | `canRead` | 8 | Etiquetas de usuario de la casilla → `MailLabel[]` (`{ id, name, color }`) |
 | `PATCH /mailboxes/:id/messages/:messageId/labels` | `canRead` | 8 | `{ add?, remove? }` (ids de etiqueta) → aplica a la conversación → `{ labelIds }` |
-| `GET /mailboxes/:id/messages/:messageId` | `canRead` | 4 | `MessageDetail` (cuerpo en texto plano, `attachments`); lo marca como leído |
+| `GET /mailboxes/:id/messages/:messageId` | `canRead` | 4·8 | `MessageDetail` (cuerpo en texto plano, `cc`, `attachments`); lo marca como leído |
 | `GET /mailboxes/:id/messages/:messageId/attachments/:attachmentId` | `canRead` | 4.5 | Descarga un adjunto (recibidos y enviados) |
 | `POST /mailboxes/:id/messages` | `canSend` | 4·4.5·8 | Redactar: `{ to, cc?, bcc?, subject, body, forwardedAttachments? }` (destinatarios: emails separados por coma) + adjuntos (`attachments`, multipart). Reenviar adjuntos pide además `canRead`. Cupo diario → 429 `RECIPIENT_LIMIT_EXCEEDED` |
 | `POST /mailboxes/:id/messages/:messageId/reply` | `canSend` | 4 | Responder en el mismo hilo: `{ body }` + adjuntos |
 | `GET /mailboxes/:id/sent` | `canRead` | 4 | Últimos 25 de Enviados → `SentMessageSummary[]` |
-| `GET /mailboxes/:id/sent/:sentId` | `canRead` | 4 | `SentMessageDetail` (cuerpo en HTML sanitizado, `attachments`) |
+| `GET /mailboxes/:id/sent/:sentId` | `canRead` | 4·8 | `SentMessageDetail` (cuerpo en HTML sanitizado, `cc`, `bcc`, `attachments`) |
 | `GET /sent/:sentId` | `canRead` en la casilla | 4 | Para "Reenviar": busca el enviado en las casillas que la persona puede leer |
 | `GET /mailboxes/:id/scheduled-messages` | `canRead` | 5 | Programados de la casilla (pendientes, enviándose y con error) → `ScheduledMessage[]` |
 | `GET /scheduled-messages/:id` | `canRead` en su casilla | 5 | `ScheduledMessage` (404 si no tiene ningún permiso en la casilla) |
@@ -838,6 +838,9 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
 - Dos envíos simultáneos podrían pasarse por poco del cupo de la app (no hay reserva); Gmail
   igual pone el límite real.
 - Responder cuenta 1 destinatario.
+- **Detalle con copias**: `MessageDetail` suma `cc` y `SentMessageDetail` suma `cc` y `bcc`
+  (headers tal cual, `''` si no hay). En un recibido no hay Bcc (Gmail no lo muestra); en la
+  copia de Enviados sí lo guarda, y solo lo ve quien tiene `canRead` en la casilla.
 
 #### 8.2 Etiquetas de Gmail
 

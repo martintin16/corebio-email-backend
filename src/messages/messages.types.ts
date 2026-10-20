@@ -39,6 +39,8 @@ export interface MessageDetail extends MessageSummary {
   /** Texto plano (el frontend lo muestra como texto, no como HTML). */
   body: string;
   to: string;
+  /** Header Cc tal cual ('' si no hay). En un recibido no existe el Bcc. */
+  cc: string;
   attachments: AttachmentInfo[];
 }
 
@@ -54,6 +56,9 @@ export interface SentMessageDetail extends SentMessageSummary {
   mailboxId: string;
   /** HTML sanitizado (el frontend lo renderiza con dangerouslySetInnerHTML). */
   body: string;
+  /** Headers Cc y Bcc tal cual ('' si no hay). Gmail guarda el Bcc en la copia de Enviados. */
+  cc: string;
+  bcc: string;
   attachments: AttachmentInfo[];
 }
 

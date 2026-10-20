@@ -233,6 +233,36 @@ describe('MessagesService', () => {
       expect(detail.body).toBe('<p>Hola html</p>');
     });
 
+    it('el detalle de un enviado trae Cc y Bcc; el de un recibido, Cc', async () => {
+      const withCopies = {
+        ...sentMessage,
+        payload: {
+          ...sentMessage.payload,
+          headers: [
+            ...sentMessage.payload.headers,
+            { name: 'Cc', value: 'Carla <carla@z.com>, beto@y.com' },
+            { name: 'Bcc', value: 'oculto@w.com' },
+          ],
+        },
+      };
+      gmail.users.messages.get.mockResolvedValue({ data: withCopies });
+      const sent = await service.getSentMessage(MBX, 'sent0001');
+      expect(sent.cc).toBe('Carla <carla@z.com>, beto@y.com');
+      expect(sent.bcc).toBe('oculto@w.com');
+
+      gmail.users.messages.get.mockResolvedValue({ data: { ...withCopies, labelIds: ['INBOX'] } });
+      const received = await service.getInboxMessage(MBX, 'sent0001');
+      expect(received.cc).toBe('Carla <carla@z.com>, beto@y.com');
+      expect(received).not.toHaveProperty('bcc');
+    });
+
+    it('sin copias, cc y bcc vienen vacíos', async () => {
+      gmail.users.messages.get.mockResolvedValue({ data: sentMessage });
+      const sent = await service.getSentMessage(MBX, 'sent0001');
+      expect(sent.cc).toBe('');
+      expect(sent.bcc).toBe('');
+    });
+
     it('un mensaje que no está en SENT → 404', async () => {
       await expect(service.getSentMessage(MBX, 'msg00001')).rejects.toBeInstanceOf(
         NotFoundException,

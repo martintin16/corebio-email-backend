@@ -768,6 +768,7 @@ export function toMessageDetail(message: GmailMessage): MessageDetail {
     ...toMessageSummary(message),
     body: text?.trim() || (html ? htmlToPlainText(sanitizeEmailHtml(html)) : ''),
     to: getHeader(message, 'To'),
+    cc: getHeader(message, 'Cc'),
     attachments: toAttachmentInfos(message),
   };
 }
@@ -789,6 +790,8 @@ export function toSentDetail(message: GmailMessage, mailboxId: string): SentMess
     ...toSentSummary(message),
     mailboxId,
     body: sanitizeEmailHtml(html ?? plainTextToHtml(text ?? '')),
+    cc: getHeader(message, 'Cc'),
+    bcc: getHeader(message, 'Bcc'),
     attachments: toAttachmentInfos(message),
   };
 }
