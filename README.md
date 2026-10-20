@@ -707,9 +707,11 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
 - Falta en el front la pantalla para crear, editar y borrar plantillas (el backend ya está).
 
 **Verificación**
-- A correr: `npm run migration:run`, `lint`, `typecheck`, `test`, `test:e2e`.
-- A verificar: crear, listar (orden por nombre), editar, quitar el asunto, nombre repetido →
-  409, sin `canSend` → 403/404, borrar.
+- ✅ Migración aplicada; `lint`, `typecheck`, `test` (342) y `test:e2e` (130).
+- ✅ Contra la API: crear (con `preview` y el `<script>` quitado), sin asunto → `null`, lista
+  ordenada sin distinguir mayúsculas, nombre repetido en otras mayúsculas → 409, quitar el
+  asunto con `subject: null`, borrar → 204. Sin `canSend` (admin con solo lectura en una
+  casilla) → lista 403 y detalle 404.
 
 ### ⏳ Pendiente
 
