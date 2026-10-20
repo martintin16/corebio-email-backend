@@ -734,8 +734,11 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
   plantillas se usan en Redactar. Para que el front sepa qué mostrar, `GET /me/mailboxes`
   suma `canRead` y `canSend`; la pantalla Plantillas lista solo las casillas con `canSend`
   (y Redactar también debería ofrecer solo esas).
-- Verificación: a correr `migration:run`, `lint`, `typecheck`, `test`, `test:e2e`, y probar
-  crear "Confirmación" y después "confirmacion" → 409 `TEMPLATE_NAME_TAKEN`.
+- ✅ Verificado: migración `TemplateNameKey` (con plantillas previas: completó `name_key` y
+  renombró "accion rapida" a "accion rapida (2)" porque chocaba con "Acción rápida"), `lint`,
+  `typecheck`, `test` (427), `test:e2e` (171); crear, nombre repetido sin tildes → 409
+  `TEMPLATE_NAME_TAKEN`, editar y ver por id bajo la casilla, borrar, ruta vieja → 404 y
+  `/me/mailboxes` con `canRead`/`canSend`.
 
 **Verificación**
 - ✅ Migración aplicada; `lint`, `typecheck`, `test` (342) y `test:e2e` (130).
