@@ -8,6 +8,10 @@ import type { DataSource, Repository } from 'typeorm';
 import type { GoogleMailboxClient } from '../google/google-mailbox-client';
 import type { MailboxAccessService } from '../mailboxes/mailbox-access.service';
 import type { MessagesService } from '../messages/messages.service';
+import {
+  RecipientLimitExceededException,
+  type SendQuotaService,
+} from '../messages/send-quota.service';
 import { rowsOf } from '../common/query-rows';
 import type { ScheduledMessage } from './entities/scheduled-message.entity';
 import {
@@ -31,6 +35,9 @@ function buildRow(overrides: Partial<ScheduledMessage> = {}): ScheduledMessage {
     createdBy: 'creator',
     updatedBy: 'creator',
     to: 'ana@x.com',
+    cc: '',
+    bcc: '',
+    recipientCount: 1,
     subject: 'Hola',
     body: '<p>Hola Ana</p>',
     attachments: [{ id: '1', filename: 'a.pdf', mimeType: 'application/pdf', size: 3 }],
@@ -90,6 +97,8 @@ describe('toView', () => {
       id: SCH,
       mailboxId: MBX,
       to: 'ana@x.com',
+      cc: '',
+      bcc: '',
       subject: 'Hola',
       bodyPreview: 'Hola Ana',
       body: '<p>Hola Ana</p>',
@@ -120,6 +129,7 @@ describe('ScheduledMessagesService', () => {
   let google: { forMailbox: jest.Mock };
   let permissions: Record<string, { read: boolean; send: boolean }>;
   let access: { hasPermission: jest.Mock };
+  let quota: { assertAvailable: jest.Mock };
   let service: ScheduledMessagesService;
 
   const draftMessage = {
@@ -181,12 +191,14 @@ describe('ScheduledMessagesService', () => {
         Promise.resolve(permissions[mailboxId]?.[p] ?? false),
       ),
     };
+    quota = { assertAvailable: jest.fn().mockResolvedValue(undefined) };
     service = new ScheduledMessagesService(
       repo as unknown as Repository<ScheduledMessage>,
       dataSource as unknown as DataSource,
       messages as unknown as MessagesService,
       google as unknown as GoogleMailboxClient,
       access as unknown as MailboxAccessService,
+      quota as unknown as SendQuotaService,
     );
   });
 
@@ -245,7 +257,13 @@ describe('ScheduledMessagesService', () => {
       );
       expect(messages.composeRaw).toHaveBeenCalledWith(
         { mailboxId: MBX },
-        expect.objectContaining({ to: 'ana@x.com', subject: 'Hola', html: '<p>Hola Ana</p>' }),
+        expect.objectContaining({
+          to: ['ana@x.com'],
+          cc: [],
+          bcc: [],
+          subject: 'Hola',
+          html: '<p>Hola Ana</p>',
+        }),
       );
       expect(messages.createDraft).toHaveBeenCalledWith(
         { mailboxId: MBX },
@@ -291,7 +309,8 @@ describe('ScheduledMessagesService', () => {
       );
       expect(repo.create.mock.calls[0][0]).toEqual(
         expect.objectContaining({
-          to: 'Ana <ana@x.com>',
+          to: 'ana@x.com',
+          recipientCount: 1,
           subject: 'Re: Consulta',
           replyToMessageId: 'msg00001',
           replyThreadId: 'thr1',
@@ -317,6 +336,67 @@ describe('ScheduledMessagesService', () => {
       await expect(
         service.create(USER, { ...dto(), scheduledAt: new Date().toISOString() }),
       ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('varios destinatarios: dedup entre campos, columnas y cupo con el total', async () => {
+      await service.create(USER, {
+        ...dto(),
+        to: 'ana@x.com, Beto@y.com',
+        cc: 'beto@y.com, carla@z.com',
+        bcc: 'oculto@w.com; ANA@x.com',
+      });
+      expect(quota.assertAvailable).toHaveBeenCalledWith(MBX, 4);
+      expect(messages.composeRaw).toHaveBeenCalledWith(
+        { mailboxId: MBX },
+        expect.objectContaining({
+          to: ['ana@x.com', 'Beto@y.com'],
+          cc: ['carla@z.com'],
+          bcc: ['oculto@w.com'],
+        }),
+      );
+      expect(repo.create.mock.calls[0][0]).toEqual(
+        expect.objectContaining({
+          to: 'ana@x.com, Beto@y.com',
+          cc: 'carla@z.com',
+          bcc: 'oculto@w.com',
+          recipientCount: 4,
+        }),
+      );
+    });
+
+    it('solo en copia oculta también vale (to vacío)', async () => {
+      await service.create(USER, { ...dto(), to: '', bcc: 'a@x.com, b@x.com' });
+      expect((repo.create.mock.calls[0][0] as ScheduledMessage).to).toBe('');
+      expect(quota.assertAvailable).toHaveBeenCalledWith(MBX, 2);
+    });
+
+    it('sin cupo → 429 RECIPIENT_LIMIT_EXCEEDED y no toca Gmail', async () => {
+      quota.assertAvailable.mockRejectedValue(new RecipientLimitExceededException(500, 3, 4));
+      await expect(
+        service.create(USER, { ...dto(), to: 'a@x.com, b@x.com, c@x.com, d@x.com' }),
+      ).rejects.toBeInstanceOf(RecipientLimitExceededException);
+      expect(google.forMailbox).not.toHaveBeenCalled();
+    });
+
+    it('400 si no queda ningún destinatario', async () => {
+      await expect(service.create(USER, { ...dto(), to: '' })).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
+
+    it('una respuesta valida el cupo con el original + cc/bcc', async () => {
+      await service.create(USER, {
+        mailboxId: MBX,
+        body: '<p>Gracias</p>',
+        scheduledAt: inOneHour(),
+        replyToMessageId: 'msg00001',
+        to: '',
+        cc: 'jefa@x.com',
+      });
+      expect(quota.assertAvailable).toHaveBeenCalledWith(MBX, 2);
+      expect(repo.create.mock.calls[0][0]).toEqual(
+        expect.objectContaining({ to: 'ana@x.com', cc: 'jefa@x.com', recipientCount: 2 }),
+      );
     });
 
     it('si falla guardar la fila, borra el borrador', async () => {
@@ -376,6 +456,27 @@ describe('ScheduledMessagesService', () => {
         kept: { partIds: string[] };
       };
       expect(sources.kept.partIds).toEqual(['1']);
+    });
+
+    it('cambiar destinatarios recalcula columnas y vuelve a validar el cupo', async () => {
+      await service.update(USER, SCH, { cc: 'carla@z.com', bcc: 'x@w.com' });
+      expect(quota.assertAvailable).toHaveBeenCalledWith(MBX, 3);
+      const saved = repo.save.mock.calls[0][0] as ScheduledMessage;
+      expect(saved).toEqual(
+        expect.objectContaining({
+          to: 'ana@x.com',
+          cc: 'carla@z.com',
+          bcc: 'x@w.com',
+          recipientCount: 3,
+        }),
+      );
+    });
+
+    it('editar dejando sin destinatarios → 400 (y libera la fila)', async () => {
+      await expect(service.update(USER, SCH, { to: '' })).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(dataSource.query.mock.calls.at(-1)?.[0]).toContain('SET locked_until = NULL');
     });
 
     it('409 si ya se envió o se está enviando', async () => {
@@ -467,7 +568,7 @@ describe('ScheduledMessagesService', () => {
       await service.update(USER, SCH, { to: 'otro@x.com', subject: 'Cambiado' });
       expect(messages.composeRaw).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ to: 'Ana <ana@x.com>', subject: 'Re: Consulta' }),
+        expect.objectContaining({ to: ['ana@x.com'], subject: 'Re: Consulta' }),
       );
       expect(messages.updateDraft).toHaveBeenCalledWith(
         expect.anything(),

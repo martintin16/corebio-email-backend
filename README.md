@@ -82,6 +82,7 @@ solo transpila, sin chequear tipos). Con el chequeo completo en cada proceso, un
 | `GOOGLE_TOKEN_ENCRYPTION_KEY` | Sí | 32 bytes en base64. Encripta los refresh_token. **Si cambia, hay que reconectar todas las casillas.** |
 | `OAUTH_STATE_SECRET` | Sí | Mínimo 32 caracteres. Firma el `state` del flujo OAuth. |
 | `CORS_ORIGINS` | Sí | Orígenes permitidos separados por coma. |
+| `MAILBOX_DAILY_RECIPIENT_LIMIT` | No (`500`) | Cupo de destinatarios por casilla en 24 horas (Gmail común ~500; Google Workspace 2000). |
 | `SCHEDULED_SENDER_ENABLED` | No (`true`) | Job de envíos programados (cada minuto). Apagarlo en una instancia que no deba enviar (ej. una copia local contra la base de producción). |
 | `PORT` | No (`4000`) | Railway lo inyecta solo. |
 | `NODE_ENV` | No | `development` / `production` / `test`. |
@@ -182,7 +183,7 @@ Códigos de respuesta:
 | `GET /mailboxes/:id/messages` | `canRead` | 4 | Últimos 25 de Recibidos → `MessageSummary[]` |
 | `GET /mailboxes/:id/messages/:messageId` | `canRead` | 4 | `MessageDetail` (cuerpo en texto plano, `attachments`); lo marca como leído |
 | `GET /mailboxes/:id/messages/:messageId/attachments/:attachmentId` | `canRead` | 4.5 | Descarga un adjunto (recibidos y enviados) |
-| `POST /mailboxes/:id/messages` | `canSend` | 4·4.5 | Redactar: `{ to, subject, body, forwardedAttachments? }` + adjuntos (`attachments`, multipart). Reenviar adjuntos pide además `canRead` |
+| `POST /mailboxes/:id/messages` | `canSend` | 4·4.5·8 | Redactar: `{ to, cc?, bcc?, subject, body, forwardedAttachments? }` (destinatarios: emails separados por coma) + adjuntos (`attachments`, multipart). Reenviar adjuntos pide además `canRead`. Cupo diario → 429 `RECIPIENT_LIMIT_EXCEEDED` |
 | `POST /mailboxes/:id/messages/:messageId/reply` | `canSend` | 4 | Responder en el mismo hilo: `{ body }` + adjuntos |
 | `GET /mailboxes/:id/sent` | `canRead` | 4 | Últimos 25 de Enviados → `SentMessageSummary[]` |
 | `GET /mailboxes/:id/sent/:sentId` | `canRead` | 4 | `SentMessageDetail` (cuerpo en HTML sanitizado, `attachments`) |
@@ -190,7 +191,7 @@ Códigos de respuesta:
 | `GET /mailboxes/:id/scheduled-messages` | `canRead` | 5 | Programados de la casilla (pendientes, enviándose y con error) → `ScheduledMessage[]` |
 | `GET /scheduled-messages/:id` | `canRead` en su casilla | 5 | `ScheduledMessage` (404 si no tiene ningún permiso en la casilla) |
 | `GET /scheduled-messages/:id/attachments/:attachmentId` | `canRead` en su casilla | 5 | Descarga un adjunto del programado |
-| `POST /scheduled-messages` | `canSend` en `mailboxId` | 5 | `{ mailboxId, to, subject, body, scheduledAt, replyToMessageId?, forwardedAttachments? }` + adjuntos (multipart) → 201 |
+| `POST /scheduled-messages` | `canSend` en `mailboxId` | 5·8 | `{ mailboxId, to, cc?, bcc?, subject, body, scheduledAt, replyToMessageId?, forwardedAttachments? }` + adjuntos (multipart) → 201 |
 | `PATCH /scheduled-messages/:id` | `canSend` (y en la casilla nueva) | 5 | Cualquier campo + `keepAttachmentIds` + adjuntos nuevos. Solo `pending`/`failed` (si no, 409) |
 | `DELETE /scheduled-messages/:id` | `canSend` en su casilla | 5 | Cancela (borra fila y borrador) → 204. Solo `pending`/`failed` (si no, 409) |
 | `GET /mailboxes/:id/templates` | `canSend` | 6 | Plantillas de la casilla, por nombre → `MessageTemplate[]` |
@@ -793,6 +794,41 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
   compartir la carpeta → `added`; carpeta + archivo de adentro → archivo en `skipped`;
   `/drive/shared` solo con la carpeta; `[]` → `removed` sin fallas; quitar la casilla revoca
   sin advertencias en el log.
+
+### ✅ Fase 8 — Varios destinatarios, cupo diario, etiquetas y contactos
+
+(Anexo 3 del front; secciones 6.11 y 6.12 del brief, que ahí figuran como "Fase 7".)
+
+#### 8.1 Varios destinatarios (to / cc / bcc) y cupo diario
+
+**Qué se construyó**
+- Redactar y programados reciben `to`, `cc` y `bcc`, cada uno un string de emails separados
+  por coma (el formato del header de Gmail). Pueden venir vacíos, pero entre los tres tiene que
+  haber al menos uno (también se valida acá). Se acepta coma o punto y coma y `Nombre <email>`.
+- El mensaje se arma con los headers `To`, `Cc` y `Bcc`. **El `Bcc` va dentro del mensaje que
+  recibe la Gmail API**: Gmail lo usa para entregar y lo saca antes de mandarlo. nodemailer lo
+  omite por defecto, así que se activa a propósito (`keepBcc`).
+- Repetidos: se sacan sin distinguir mayúsculas; si una dirección está en dos campos, queda en
+  el más visible (to > cc > bcc) para que nadie lo reciba dos veces. Hasta 500 por mensaje.
+- Programados guardan `cc`, `bcc` y `recipient_count` (migración
+  `1791300000000-AddRecipientsAndSendLog`). En una respuesta programada `to` sale del original;
+  `cc` y `bcc` se respetan.
+- **Cupo diario** (`SendQuotaService`): tabla `mailbox_send_log` con cada envío hecho desde la
+  app y su cantidad de destinatarios. Se suma una ventana móvil de 24 horas (como Gmail) contra
+  `MAILBOX_DAILY_RECIPIENT_LIMIT` (500 por defecto). Si un envío no entra: **429**
+  `{ code: 'RECIPIENT_LIMIT_EXCEEDED', limit, remaining, requested, message }`.
+  - Redactar y Responder: se valida antes de ir a Google y se descuenta al enviar.
+  - Programados: se valida al programar y al editar, y **de nuevo cuando el job lo dispara**;
+    si ahí no alcanza, queda `failed` con "Se superó el cupo diario… quedan N. Editalo para
+    reprogramarlo." (no se reintenta solo).
+
+**Decisiones**
+- **Solo se cuenta lo que sale desde la app**: lo que se mande directo desde Gmail no se ve. Por
+  eso, si Gmail igual rechaza por su propio cupo (`dailyLimitExceeded`), se informa con el
+  mismo `RECIPIENT_LIMIT_EXCEEDED` (con `remaining: 0`).
+- Dos envíos simultáneos podrían pasarse por poco del cupo de la app (no hay reserva); Gmail
+  igual pone el límite real.
+- Responder cuenta 1 destinatario.
 
 ### ⏳ Pendiente
 

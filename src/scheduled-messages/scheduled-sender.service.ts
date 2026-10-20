@@ -15,6 +15,11 @@ import {
 } from '../google/google-mailbox-client';
 import { MailboxAccessService } from '../mailboxes/mailbox-access.service';
 import { MessagesService } from '../messages/messages.service';
+import {
+  RecipientLimitExceededException,
+  recipientLimitMessage,
+  SendQuotaService,
+} from '../messages/send-quota.service';
 
 /** Cada cuánto se buscan programados vencidos. */
 export const TICK_MS = 60_000;
@@ -45,6 +50,8 @@ export interface ClaimedRow {
   /** Quién responde por el envío: el último que lo editó, o quien lo creó. */
   responsible: string | null;
   attempts: number;
+  /** to + cc + bcc (se descuenta del cupo diario). */
+  recipient_count: number;
 }
 
 /**
@@ -72,6 +79,7 @@ export class ScheduledSenderService implements OnApplicationBootstrap, OnModuleD
     private readonly google: GoogleMailboxClient,
     private readonly access: MailboxAccessService,
     private readonly config: ConfigService,
+    private readonly quota: SendQuotaService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -132,7 +140,7 @@ export class ScheduledSenderService implements OnApplicationBootstrap, OnModuleD
            FOR UPDATE SKIP LOCKED
         )
         RETURNING id, mailbox_id, gmail_draft_id,
-                  COALESCE(updated_by, created_by) AS responsible, attempts`,
+                  COALESCE(updated_by, created_by) AS responsible, attempts, recipient_count`,
       [BATCH_SIZE],
     );
     return rowsOf(result);
@@ -143,13 +151,18 @@ export class ScheduledSenderService implements OnApplicationBootstrap, OnModuleD
       if (!row.gmail_draft_id) return await this.fail(row, ERRORS.noDraft);
       if (!(await this.responsibleCanSend(row))) return await this.fail(row, ERRORS.noPermission);
 
+      // El cupo se vuelve a mirar ahora: pudo haberse usado desde que se programó.
+      const count = row.recipient_count ?? 1;
+      const remaining = await this.quota.remaining(row.mailbox_id);
+      if (count > remaining) return await this.fail(row, quotaReason(remaining, count));
+
       const apis = await this.google.forMailbox(row.mailbox_id);
       // Un borrador "borrado" desde Gmail va a la Papelera y drafts.send lo
       // enviaría igual: si está ahí, la persona quiso cancelarlo.
       if (await this.messages.isDraftTrashed(apis, row.gmail_draft_id)) {
         return await this.fail(row, ERRORS.draftTrashed);
       }
-      const sent = await this.messages.sendDraft(apis, row.gmail_draft_id);
+      const sent = await this.messages.sendDraft(apis, row.gmail_draft_id, count);
       await this.dataSource.query(
         `UPDATE public.scheduled_messages
             SET status = 'sent', sent_at = now(), gmail_message_id = $2, gmail_thread_id = $3,
@@ -158,12 +171,16 @@ export class ScheduledSenderService implements OnApplicationBootstrap, OnModuleD
           WHERE id = $1`,
         [row.id, sent.messageId, sent.threadId],
       );
+      await this.quota.record(row.mailbox_id, count, 'scheduled');
       this.logger.log(`Programado ${row.id} enviado (${sent.messageId})`);
     } catch (err) {
       if (err instanceof MailboxNeedsReconnectException) {
         return this.fail(row, ERRORS.needsReconnect);
       }
       if (err instanceof NotFoundException) return this.fail(row, ERRORS.draftMissing);
+      if (err instanceof RecipientLimitExceededException) {
+        return this.fail(row, quotaReason(err.remaining, err.requested));
+      }
 
       const message = err instanceof Error ? err.message : String(err);
       const delay = RETRY_DELAYS_MINUTES[row.attempts - 1];
@@ -202,4 +219,9 @@ export class ScheduledSenderService implements OnApplicationBootstrap, OnModuleD
       [row.id, reason],
     );
   }
+}
+
+/** Motivo de `failed` por cupo: lo mismo que ve Redactar, más qué hacer. */
+function quotaReason(remaining: number, requested: number): string {
+  return `${recipientLimitMessage(remaining, requested)}. Editalo para reprogramarlo.`;
 }

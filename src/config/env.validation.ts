@@ -51,4 +51,7 @@ export const envValidationSchema = Joi.object({
   // Job de envíos programados (cada minuto). Apagarlo en una instancia que no
   // deba enviar (ej. una copia local apuntando a la misma base).
   SCHEDULED_SENDER_ENABLED: Joi.boolean().default(true),
+
+  // Cupo de destinatarios por casilla en 24 horas (Gmail común ~500; Workspace 2000).
+  MAILBOX_DAILY_RECIPIENT_LIMIT: Joi.number().integer().min(1).default(500),
 });

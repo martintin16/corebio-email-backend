@@ -23,9 +23,21 @@ export class ScheduledMessage {
   @Column({ name: 'updated_by', type: 'uuid', nullable: true })
   updatedBy: string | null;
 
-  /** Destinatario (puede ser `Nombre <email>` si es una respuesta). */
+  /** Destinatarios "Para", separados por coma ('' si todo va en copia). */
   @Column({ name: 'to_address', type: 'text' })
   to: string;
+
+  /** Emails separados por coma ('' si no hay). */
+  @Column({ name: 'cc_addresses', type: 'text', default: '' })
+  cc: string;
+
+  /** Copia oculta: emails separados por coma ('' si no hay). */
+  @Column({ name: 'bcc_addresses', type: 'text', default: '' })
+  bcc: string;
+
+  /** to + cc + bcc: lo que se descuenta del cupo diario al enviarse. */
+  @Column({ name: 'recipient_count', type: 'integer', default: 1 })
+  recipientCount: number;
 
   @Column({ type: 'text' })
   subject: string;

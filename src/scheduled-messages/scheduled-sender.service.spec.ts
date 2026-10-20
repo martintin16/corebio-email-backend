@@ -8,6 +8,10 @@ import {
 import type { MailboxAccessService } from '../mailboxes/mailbox-access.service';
 import type { MessagesService } from '../messages/messages.service';
 import {
+  RecipientLimitExceededException,
+  type SendQuotaService,
+} from '../messages/send-quota.service';
+import {
   BATCH_SIZE,
   type ClaimedRow,
   ERRORS,
@@ -23,6 +27,7 @@ const claimed = (overrides: Partial<ClaimedRow> = {}): ClaimedRow => ({
   gmail_draft_id: 'r-draft1',
   responsible: 'u1',
   attempts: 1,
+  recipient_count: 3,
   ...overrides,
 });
 
@@ -34,6 +39,7 @@ describe('ScheduledSenderService', () => {
   let google: { forMailbox: jest.Mock };
   let access: { hasPermission: jest.Mock };
   let config: { get: jest.Mock };
+  let quota: { remaining: jest.Mock; record: jest.Mock };
   let sender: ScheduledSenderService;
 
   /** Las sentencias que mandó el job, sin las de la toma ni la de permisos. */
@@ -62,12 +68,17 @@ describe('ScheduledSenderService', () => {
     google = { forMailbox: jest.fn((mailboxId: string) => Promise.resolve({ mailboxId })) };
     access = { hasPermission: jest.fn().mockResolvedValue(true) };
     config = { get: jest.fn() };
+    quota = {
+      remaining: jest.fn().mockResolvedValue(500),
+      record: jest.fn().mockResolvedValue(undefined),
+    };
     sender = new ScheduledSenderService(
       dataSource as unknown as DataSource,
       messages as unknown as MessagesService,
       google as unknown as GoogleMailboxClient,
       access as unknown as MailboxAccessService,
       config as unknown as ConfigService,
+      quota as unknown as SendQuotaService,
     );
   });
 
@@ -86,7 +97,8 @@ describe('ScheduledSenderService', () => {
   it('envía el borrador y marca sent con los ids de Gmail', async () => {
     await sender.tick();
     expect(access.hasPermission).toHaveBeenCalledWith('u1', MBX, 'send');
-    expect(messages.sendDraft).toHaveBeenCalledWith({ mailboxId: MBX }, 'r-draft1');
+    expect(messages.sendDraft).toHaveBeenCalledWith({ mailboxId: MBX }, 'r-draft1', 3);
+    expect(quota.record).toHaveBeenCalledWith(MBX, 3, 'scheduled');
     const [sql, params] = lastUpdate();
     expect(sql).toContain("status = 'sent'");
     expect(params).toEqual(['sch-1', 'sent0001', 'thr1']);
@@ -109,6 +121,24 @@ describe('ScheduledSenderService', () => {
     rows = [claimed({ responsible: null })];
     await sender.tick();
     expect(lastUpdate()[1]).toEqual(['sch-1', ERRORS.noPermission]);
+  });
+
+  it('sin cupo al momento de enviar → failed con lo que queda, sin tocar Gmail', async () => {
+    quota.remaining.mockResolvedValue(2);
+    await sender.tick();
+    expect(google.forMailbox).not.toHaveBeenCalled();
+    const [sql, params] = lastUpdate();
+    expect(sql).toContain("status = 'failed'");
+    expect(params[1]).toMatch(/cupo diario.*tiene 3 destinatarios y quedan 2.*Editalo/);
+    expect(quota.record).not.toHaveBeenCalled();
+  });
+
+  it('si Gmail rechaza por su propio cupo → failed (sin reintentos)', async () => {
+    messages.sendDraft.mockRejectedValue(new RecipientLimitExceededException(500, 0, 3));
+    await sender.tick();
+    const [sql, params] = lastUpdate();
+    expect(sql).toContain("status = 'failed'");
+    expect(params[1]).toMatch(/quedan 0/);
   });
 
   it('casilla que necesita reconectarse → failed sin reintentos', async () => {

@@ -2,7 +2,6 @@ import { Transform } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
-  IsEmail,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -14,13 +13,14 @@ import { toArrayField, trimString } from '../../common/transforms';
 import { MAX_ATTACHMENTS } from '../attachments';
 import { ForwardedAttachmentDto } from './forwarded-attachment.dto';
 import { HasVisibleText } from './has-visible-text.validator';
+import { HasAnyRecipient, IsRecipientList } from './recipient-list.validator';
 
 /** Máximo de HTML aceptado en el cuerpo (los adjuntos van aparte). */
 export const MAX_BODY_LENGTH = 1_000_000;
 
 /**
  * Body de POST /mailboxes/:mailboxId/messages (Redactar) — mismo shape que
- * `composeSchema` del frontend. Puede llegar como JSON o como multipart/form-data
+ * `composeSchema` del frontend (`to`, `cc`, `bcc` con emails separados por coma). Puede llegar como JSON o como multipart/form-data
  * (con los archivos en el campo `attachments`).
  */
 export class SendMessageDto {
@@ -29,10 +29,26 @@ export class SendMessageDto {
   @IsUUID()
   mailboxId?: string;
 
+  /**
+   * Destinatarios: cada campo es un string de emails separados por coma (el
+   * formato del header de Gmail). Pueden venir vacíos, pero entre los tres
+   * tiene que haber al menos uno.
+   */
   @Transform(trimString)
-  @IsEmail({}, { message: 'to tiene que ser un email válido' })
-  @MaxLength(254)
-  to: string;
+  @IsRecipientList()
+  @HasAnyRecipient()
+  // '' si no viene: así la validación de "al menos uno" corre igual.
+  to = '';
+
+  @IsOptional()
+  @Transform(trimString)
+  @IsRecipientList()
+  cc?: string;
+
+  @IsOptional()
+  @Transform(trimString)
+  @IsRecipientList()
+  bcc?: string;
 
   @Transform(trimString)
   @IsString()

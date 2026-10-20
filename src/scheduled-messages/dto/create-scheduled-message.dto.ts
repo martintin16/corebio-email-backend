@@ -2,7 +2,6 @@ import { Transform } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
-  IsEmail,
   IsISO8601,
   IsNotEmpty,
   IsOptional,
@@ -17,27 +16,42 @@ import { toArrayField, trimString } from '../../common/transforms';
 import { MAX_ATTACHMENTS } from '../../messages/attachments';
 import { ForwardedAttachmentDto } from '../../messages/dto/forwarded-attachment.dto';
 import { HasVisibleText } from '../../messages/dto/has-visible-text.validator';
+import { HasAnyRecipient, IsRecipientList } from '../../messages/dto/recipient-list.validator';
 import { MAX_BODY_LENGTH } from '../../messages/dto/send-message.dto';
 import { GMAIL_ID } from '../../messages/pipes/parse-gmail-id.pipe';
 
 /**
  * Body de POST /scheduled-messages — `ScheduleMessageInput` del frontend
- * (`mailboxId, to, subject, body, scheduledAt`) + adjuntos y respuesta.
+ * (`mailboxId, to, cc, bcc, subject, body, scheduledAt`) + adjuntos y respuesta.
  * JSON o multipart/form-data (archivos en `attachments`).
  *
  * Con `replyToMessageId` es una respuesta programada: destinatario y asunto
  * salen del mensaje original (igual que Responder), así que `to` y `subject`
- * no hacen falta y, si vienen, se ignoran.
+ * no hacen falta y, si vienen, se ignoran; `cc` y `bcc` sí se usan.
  */
 export class CreateScheduledMessageDto {
   @IsUUID(undefined, { message: 'mailboxId inválido' })
   mailboxId: string;
 
-  @ValidateIf((o: CreateScheduledMessageDto) => !o.replyToMessageId || o.to !== undefined)
+  /**
+   * Destinatarios, como en Redactar: emails separados por coma; entre to, cc y
+   * bcc al menos uno. En una respuesta `to` sale del original.
+   */
+  @ValidateIf((o: CreateScheduledMessageDto) => !o.replyToMessageId)
   @Transform(trimString)
-  @IsEmail({}, { message: 'to tiene que ser un email válido' })
-  @MaxLength(254)
-  to?: string;
+  @IsRecipientList()
+  @HasAnyRecipient()
+  to = '';
+
+  @IsOptional()
+  @Transform(trimString)
+  @IsRecipientList()
+  cc?: string;
+
+  @IsOptional()
+  @Transform(trimString)
+  @IsRecipientList()
+  bcc?: string;
 
   @ValidateIf((o: CreateScheduledMessageDto) => !o.replyToMessageId || o.subject !== undefined)
   @Transform(trimString)

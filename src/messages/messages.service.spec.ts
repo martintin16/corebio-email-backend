@@ -12,6 +12,7 @@ import {
 } from '../google/google-mailbox-client';
 import type { MailboxAccessService } from '../mailboxes/mailbox-access.service';
 import { DRAFT_NOT_FOUND, isGmailNotFound, LIST_LIMIT, MessagesService } from './messages.service';
+import { RecipientLimitExceededException, type SendQuotaService } from './send-quota.service';
 
 const MBX = '11111111-1111-4111-8111-111111111111';
 const MBX2 = '22222222-2222-4222-8222-222222222222';
@@ -82,6 +83,7 @@ describe('MessagesService', () => {
   };
   let google: { forMailbox: jest.Mock; handleGoogleError: jest.Mock };
   let access: { findSummariesByUser: jest.Mock; hasPermission: jest.Mock };
+  let quota: { limit: number; assertAvailable: jest.Mock; record: jest.Mock };
   let service: MessagesService;
 
   beforeEach(() => {
@@ -118,9 +120,16 @@ describe('MessagesService', () => {
       handleGoogleError: jest.fn(() => Promise.reject(new BadGatewayException())),
     };
     access = { findSummariesByUser: jest.fn(), hasPermission: jest.fn().mockResolvedValue(true) };
+    quota = {
+      limit: 500,
+      assertAvailable: jest.fn().mockResolvedValue(undefined),
+      record: jest.fn().mockResolvedValue(undefined),
+    };
+
     service = new MessagesService(
       google as unknown as GoogleMailboxClient,
       access as unknown as MailboxAccessService,
+      quota as unknown as SendQuotaService,
     );
   });
 
@@ -276,6 +285,52 @@ describe('MessagesService', () => {
           subject: 'Hola',
           snippet: 'Hola Ana',
         }),
+      );
+    });
+
+    it('varios destinatarios: To/Cc/Bcc en el mensaje, sin repetidos, y descuenta el cupo', async () => {
+      const result = await service.send(MBX, {
+        to: 'ana@x.com, beto@y.com',
+        cc: 'BETO@y.com, carla@z.com',
+        bcc: 'oculto@w.com, ana@X.com',
+        subject: 'Hola',
+        body: '<p>Hola</p>',
+      });
+      expect(quota.assertAvailable).toHaveBeenCalledWith(MBX, 4);
+      const call = gmail.users.messages.send.mock.calls[0][0] as { media: { body: Readable } };
+      const raw = await streamToString(call.media.body);
+      expect(raw).toMatch(/^To: ana@x\.com, beto@y\.com/m);
+      expect(raw).toMatch(/^Cc: carla@z\.com\r?$/m);
+      expect(raw).toMatch(/^Bcc: oculto@w\.com\r?$/m);
+      expect(quota.record).toHaveBeenCalledWith(MBX, 4, 'compose');
+      expect(result.to).toBe('ana@x.com, beto@y.com');
+    });
+
+    it('sin cupo → 429 RECIPIENT_LIMIT_EXCEEDED antes de ir a Google', async () => {
+      quota.assertAvailable.mockRejectedValue(new RecipientLimitExceededException(500, 0, 1));
+      await expect(service.send(MBX, dto)).rejects.toBeInstanceOf(RecipientLimitExceededException);
+      expect(google.forMailbox).not.toHaveBeenCalled();
+    });
+
+    it('si Gmail rechaza por su cupo de envío, también es RECIPIENT_LIMIT_EXCEEDED', async () => {
+      gmail.users.messages.send.mockRejectedValue(
+        Object.assign(new Error('Daily user sending limit exceeded'), {
+          errors: [{ reason: 'dailyLimitExceeded' }],
+        }),
+      );
+      const err = (await service
+        .send(MBX, dto)
+        .catch((e: unknown) => e)) as RecipientLimitExceededException;
+      expect(err).toBeInstanceOf(RecipientLimitExceededException);
+      expect(err.getResponse()).toEqual(
+        expect.objectContaining({ code: 'RECIPIENT_LIMIT_EXCEEDED', remaining: 0, requested: 1 }),
+      );
+      expect(quota.record).not.toHaveBeenCalled();
+    });
+
+    it('400 si no hay ningún destinatario', async () => {
+      await expect(service.send(MBX, { ...dto, to: '' })).rejects.toBeInstanceOf(
+        BadRequestException,
       );
     });
 

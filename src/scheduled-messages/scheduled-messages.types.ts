@@ -10,7 +10,10 @@ export type ScheduledMessageStatus = (typeof SCHEDULED_STATUSES)[number];
 export interface ScheduledMessageView {
   id: string;
   mailboxId: string;
+  /** Emails separados por coma, como en Redactar ('' si no hay). */
   to: string;
+  cc: string;
+  bcc: string;
   subject: string;
   /** Texto plano corto para la lista. */
   bodyPreview: string;

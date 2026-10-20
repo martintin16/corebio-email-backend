@@ -3,6 +3,7 @@ import { GoogleModule } from '../google/google.module';
 import { MailboxesModule } from '../mailboxes/mailboxes.module';
 import { MessagesController, SentLookupController } from './messages.controller';
 import { MessagesService } from './messages.service';
+import { SendQuotaService } from './send-quota.service';
 
 /**
  * Fases 4 y 4.5 — Recibidos, Enviados, Redactar, Responder y adjuntos contra la Gmail API
@@ -12,8 +13,8 @@ import { MessagesService } from './messages.service';
 @Module({
   imports: [GoogleModule, MailboxesModule],
   controllers: [MessagesController, SentLookupController],
-  providers: [MessagesService],
+  providers: [MessagesService, SendQuotaService],
   // Lo usa ScheduledMessagesModule para armar, guardar y enviar los programados.
-  exports: [MessagesService],
+  exports: [MessagesService, SendQuotaService],
 })
 export class MessagesModule {}

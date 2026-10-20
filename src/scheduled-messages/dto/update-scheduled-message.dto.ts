@@ -2,7 +2,6 @@ import { Transform } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
-  IsEmail,
   IsISO8601,
   IsNotEmpty,
   IsOptional,
@@ -16,6 +15,7 @@ import { toArrayField, trimString } from '../../common/transforms';
 import { MAX_ATTACHMENTS } from '../../messages/attachments';
 import { ForwardedAttachmentDto } from '../../messages/dto/forwarded-attachment.dto';
 import { HasVisibleText } from '../../messages/dto/has-visible-text.validator';
+import { IsRecipientList } from '../../messages/dto/recipient-list.validator';
 import { MAX_BODY_LENGTH } from '../../messages/dto/send-message.dto';
 import { ATTACHMENT_ID } from '../../messages/pipes/parse-gmail-id.pipe';
 
@@ -25,7 +25,8 @@ import { ATTACHMENT_ID } from '../../messages/pipes/parse-gmail-id.pipe';
  * - `keepAttachmentIds` omitido → se conservan todos los que tenía;
  *   `[]` → no se conserva ninguno; `["1","3"]` → solo esos.
  * - Los archivos nuevos (`attachments`, multipart) y `forwardedAttachments` se suman.
- * En una respuesta programada `to` y `subject` se ignoran (salen del original).
+ * En una respuesta programada `to` y `subject` se ignoran (salen del original);
+ * `cc` y `bcc` sí se pueden cambiar.
  */
 export class UpdateScheduledMessageDto {
   /** Mover a otra casilla (pide canSend también en la nueva). */
@@ -33,11 +34,21 @@ export class UpdateScheduledMessageDto {
   @IsUUID(undefined, { message: 'mailboxId inválido' })
   mailboxId?: string;
 
+  /** Emails separados por coma. Después del cambio tiene que quedar al menos uno entre los tres. */
   @IsOptional()
   @Transform(trimString)
-  @IsEmail({}, { message: 'to tiene que ser un email válido' })
-  @MaxLength(254)
+  @IsRecipientList()
   to?: string;
+
+  @IsOptional()
+  @Transform(trimString)
+  @IsRecipientList()
+  cc?: string;
+
+  @IsOptional()
+  @Transform(trimString)
+  @IsRecipientList()
+  bcc?: string;
 
   @IsOptional()
   @Transform(trimString)

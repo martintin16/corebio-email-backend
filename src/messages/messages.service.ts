@@ -36,6 +36,12 @@ import {
   replySubject,
 } from './gmail/gmail-message';
 import { buildRawMessage, type OutgoingAttachment } from './gmail/mime';
+import { joinRecipients, recipientCount, resolveRecipients } from './recipients';
+import {
+  isGmailSendingLimitError,
+  RecipientLimitExceededException,
+  SendQuotaService,
+} from './send-quota.service';
 import type {
   AttachmentInfo,
   DownloadedAttachment,
@@ -60,7 +66,9 @@ export interface ReplyContext {
 
 /** Lo que hace falta para armar un mensaje saliente (envío directo o borrador). */
 export interface ComposeInput {
-  to: string;
+  to: string | string[];
+  cc?: string[];
+  bcc?: string[];
   subject: string;
   /** HTML ya sanitizado. */
   html: string;
@@ -115,6 +123,7 @@ export class MessagesService {
   constructor(
     private readonly google: GoogleMailboxClient,
     private readonly access: MailboxAccessService,
+    private readonly quota: SendQuotaService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -208,24 +217,28 @@ export class MessagesService {
     }
     const forwarded = dto.forwardedAttachments ?? [];
     // Primero lo que se puede rechazar sin hablar con Google.
+    const recipients = resolveRecipients(dto);
+    const count = recipientCount(recipients);
     toOutgoingAttachments(files);
     assertAttachmentLimits((files?.length ?? 0) + forwarded.length, 0);
     if (forwarded.length > 0) await this.assertCanRead(userId, mailboxId);
+    await this.quota.assertAvailable(mailboxId, count);
 
     const apis = await this.google.forMailbox(mailboxId);
     const html = sanitizeEmailHtml(dto.body);
     const attachments = await this.collectAttachments(apis, { files, forwarded });
     const raw = await this.composeRaw(apis, {
-      to: dto.to,
+      ...recipients,
       subject: dto.subject,
       html,
       attachments,
     });
-    const sent = await this.sendRaw(apis, raw);
+    const sent = await this.sendRaw(apis, raw, undefined, count);
+    await this.quota.record(mailboxId, count, 'compose');
 
     return {
       id: sent.id ?? '',
-      to: dto.to,
+      to: joinRecipients(recipients.to.length > 0 ? recipients.to : recipients.cc),
       subject: dto.subject,
       snippet: toSnippet(htmlToPlainText(html)),
       sentAt: new Date().toISOString(),
@@ -243,6 +256,7 @@ export class MessagesService {
     files?: UploadedAttachment[],
   ): Promise<SentMessageSummary> {
     const attachments = toOutgoingAttachments(files);
+    await this.quota.assertAvailable(mailboxId, 1);
     const apis = await this.google.forMailbox(mailboxId);
     const reply = await this.resolveReply(apis, messageId);
     const html = sanitizeEmailHtml(dto.body);
@@ -253,7 +267,8 @@ export class MessagesService {
       attachments,
       reply,
     });
-    const sent = await this.sendRaw(apis, raw, reply.threadId);
+    const sent = await this.sendRaw(apis, raw, reply.threadId, 1);
+    await this.quota.record(mailboxId, 1, 'reply');
 
     return {
       id: sent.id ?? '',
@@ -389,6 +404,8 @@ export class MessagesService {
     return buildRawMessage({
       from: { name: apis.displayName, address: apis.email },
       to: input.to,
+      cc: input.cc,
+      bcc: input.bcc,
       subject: input.subject,
       html: input.html,
       text: htmlToPlainText(input.html),
@@ -475,15 +492,20 @@ export class MessagesService {
   async sendDraft(
     apis: MailboxGoogleApis,
     draftId: string,
+    recipients = 0,
   ): Promise<{ messageId: string; threadId: string | null }> {
     const sent = await this.call(
       apis.mailboxId,
       async () => {
-        const { data } = await apis.gmail.users.drafts.send({
-          userId: 'me',
-          requestBody: { id: draftId },
-        });
-        return data;
+        try {
+          const { data } = await apis.gmail.users.drafts.send({
+            userId: 'me',
+            requestBody: { id: draftId },
+          });
+          return data;
+        } catch (err) {
+          throw this.sendingLimitOr(err, recipients);
+        }
       },
       DRAFT_NOT_FOUND,
     );
@@ -541,15 +563,31 @@ export class MessagesService {
    * Envía el mensaje ya armado como subida `message/rfc822` (admite hasta 35 MB,
    * a diferencia del campo `raw` en JSON).
    */
-  private sendRaw(apis: MailboxGoogleApis, raw: Buffer, threadId?: string): Promise<GmailMessage> {
+  private sendRaw(
+    apis: MailboxGoogleApis,
+    raw: Buffer,
+    threadId: string | undefined,
+    recipients: number,
+  ): Promise<GmailMessage> {
     return this.call(apis.mailboxId, async () => {
-      const { data } = await apis.gmail.users.messages.send({
-        userId: 'me',
-        requestBody: threadId ? { threadId } : {},
-        media: { mimeType: 'message/rfc822', body: Readable.from([raw]) },
-      });
-      return data;
+      try {
+        const { data } = await apis.gmail.users.messages.send({
+          userId: 'me',
+          requestBody: threadId ? { threadId } : {},
+          media: { mimeType: 'message/rfc822', body: Readable.from([raw]) },
+        });
+        return data;
+      } catch (err) {
+        throw this.sendingLimitOr(err, recipients);
+      }
     });
+  }
+
+  /** Si Gmail rechazó por su cupo de envío, el mismo 429 que el cupo de la app. */
+  private sendingLimitOr(err: unknown, recipients: number): unknown {
+    return isGmailSendingLimitError(err)
+      ? new RecipientLimitExceededException(this.quota.limit, 0, recipients)
+      : err;
   }
 
   /** Contenido de un adjunto: viene en la parte o se pide aparte a Gmail. */
@@ -593,6 +631,7 @@ export class MessagesService {
     try {
       return await fn();
     } catch (err) {
+      if (err instanceof RecipientLimitExceededException) throw err;
       if (isGmailNotFound(err)) throw new NotFoundException(notFoundMessage);
       return this.google.handleGoogleError(mailboxId, err);
     }

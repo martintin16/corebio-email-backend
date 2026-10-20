@@ -22,6 +22,13 @@ import {
   toAttachmentInfos,
 } from '../messages/messages.service';
 import type { AttachmentInfo, DownloadedAttachment } from '../messages/messages.types';
+import {
+  joinRecipients,
+  recipientCount,
+  type Recipients,
+  resolveRecipients,
+} from '../messages/recipients';
+import { SendQuotaService } from '../messages/send-quota.service';
 import type { CreateScheduledMessageDto } from './dto/create-scheduled-message.dto';
 import type { UpdateScheduledMessageDto } from './dto/update-scheduled-message.dto';
 import { ScheduledMessage } from './entities/scheduled-message.entity';
@@ -57,6 +64,7 @@ export class ScheduledMessagesService {
     private readonly messages: MessagesService,
     private readonly google: GoogleMailboxClient,
     private readonly access: MailboxAccessService,
+    private readonly quota: SendQuotaService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -105,24 +113,36 @@ export class ScheduledMessagesService {
     await this.assertPermission(userId, dto.mailboxId, 'send');
     if (forwarded.length > 0) await this.assertCanForward(userId, dto.mailboxId);
     toOutgoingAttachments(files);
+    if (!dto.replyToMessageId) {
+      // Sin respuesta, los destinatarios ya se conocen: el cupo se valida antes de ir a Google.
+      await this.quota.assertAvailable(dto.mailboxId, recipientCount(resolveRecipients(dto)));
+    }
 
     const apis = await this.google.forMailbox(dto.mailboxId);
     const reply = dto.replyToMessageId
       ? await this.messages.resolveReply(apis, dto.replyToMessageId)
       : undefined;
-    const to = reply?.to ?? dto.to ?? '';
+    const recipients = resolveRecipients({ to: reply?.to ?? dto.to, cc: dto.cc, bcc: dto.bcc });
+    const count = recipientCount(recipients);
+    if (reply) await this.quota.assertAvailable(dto.mailboxId, count);
     const subject = reply?.subject ?? dto.subject ?? '';
     const html = sanitizeEmailHtml(dto.body);
 
     const attachments = await this.messages.collectAttachments(apis, { files, forwarded });
-    const raw = await this.messages.composeRaw(apis, { to, subject, html, attachments, reply });
+    const raw = await this.messages.composeRaw(apis, {
+      ...recipients,
+      subject,
+      html,
+      attachments,
+      reply,
+    });
     const draftId = await this.messages.createDraft(apis, raw, reply?.threadId);
 
     const row = this.repo.create({
       mailboxId: dto.mailboxId,
       createdBy: userId,
       updatedBy: userId,
-      to,
+      ...recipientColumns(recipients),
       subject,
       body: html,
       attachments: await this.draftAttachments(apis, draftId, attachments.length),
@@ -187,7 +207,12 @@ export class ScheduledMessagesService {
       }
 
       const reply = replyContextOf(row);
-      const to = reply?.to ?? dto.to ?? row.to;
+      const recipients = resolveRecipients({
+        to: reply ? row.to : (dto.to ?? row.to),
+        cc: dto.cc ?? row.cc,
+        bcc: dto.bcc ?? row.bcc,
+      });
+      await this.quota.assertAvailable(targetMailboxId, recipientCount(recipients));
       const subject = reply?.subject ?? dto.subject ?? row.subject;
       const html = dto.body !== undefined ? sanitizeEmailHtml(dto.body) : row.body;
 
@@ -197,7 +222,7 @@ export class ScheduledMessagesService {
         kept: draft ? { apis: sourceApis, message: draft, partIds: keepIds } : undefined,
       });
       const raw = await this.messages.composeRaw(targetApis, {
-        to,
+        ...recipients,
         subject,
         html,
         attachments,
@@ -220,7 +245,7 @@ export class ScheduledMessagesService {
       Object.assign(row, {
         mailboxId: targetMailboxId,
         updatedBy: userId,
-        to,
+        ...recipientColumns(recipients),
         subject,
         body: html,
         attachments: await this.draftAttachments(targetApis, draftId, attachments.length),
@@ -408,6 +433,18 @@ export function parseScheduledAt(value: string, now = Date.now()): Date {
   return date;
 }
 
+/** Las columnas de destinatarios de la fila. */
+function recipientColumns(
+  r: Recipients,
+): Pick<ScheduledMessage, 'to' | 'cc' | 'bcc' | 'recipientCount'> {
+  return {
+    to: joinRecipients(r.to),
+    cc: joinRecipients(r.cc),
+    bcc: joinRecipients(r.bcc),
+    recipientCount: recipientCount(r),
+  };
+}
+
 function replyContextOf(row: ScheduledMessage): ReplyContext | undefined {
   if (!row.replyToMessageId) return undefined;
   return {
@@ -424,6 +461,8 @@ export function toView(row: ScheduledMessage): ScheduledMessageView {
     id: row.id,
     mailboxId: row.mailboxId,
     to: row.to,
+    cc: row.cc ?? '',
+    bcc: row.bcc ?? '',
     subject: row.subject,
     bodyPreview: toSnippet(htmlToPlainText(row.body)),
     body: row.body,

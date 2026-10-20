@@ -3,6 +3,7 @@ import { MailboxAccessGuard } from '../src/mailboxes/guards/mailbox-access.guard
 import { MailboxAccessService } from '../src/mailboxes/mailbox-access.service';
 import { MessagesController, SentLookupController } from '../src/messages/messages.controller';
 import { MessagesService } from '../src/messages/messages.service';
+import { RecipientLimitExceededException } from '../src/messages/send-quota.service';
 import { ADMIN_ID, createTestApp, type TestApp, USER_ID } from './utils/test-app';
 
 const MBX = '11111111-2222-4333-8444-555555555555';
@@ -157,6 +158,57 @@ describe('Messages (e2e)', () => {
         { mailboxId: MBX, to: 'ana@x.com', subject: 'Hola', body: '<p>Hola</p>' },
         undefined,
         USER_ID,
+      );
+    });
+
+    it('to/cc/bcc como emails separados por coma; alcanza con uno en cualquiera', async () => {
+      await http()
+        .post(`/mailboxes/${MBX}/messages`)
+        .set('Authorization', await asUser())
+        .send({
+          to: '',
+          cc: 'ana@x.com, beto@y.com',
+          bcc: 'oculto@w.com',
+          subject: 'Hola',
+          body: '<p>Hola</p>',
+        })
+        .expect(201);
+      expect(messages.send).toHaveBeenCalledWith(
+        MBX,
+        expect.objectContaining({ to: '', cc: 'ana@x.com, beto@y.com', bcc: 'oculto@w.com' }),
+        undefined,
+        USER_ID,
+      );
+    });
+
+    it.each([
+      ['los tres vacíos', { to: '', cc: '', bcc: '' }],
+      ['sin ningún campo de destinatarios', {}],
+      ['un email inválido en cc', { to: 'a@b.com', cc: 'bien@x.com, mal' }],
+      ['bcc que no es texto', { to: 'a@b.com', bcc: ['x@y.com'] }],
+    ])('400 con destinatarios: %s', async (_case, recipients) => {
+      await http()
+        .post(`/mailboxes/${MBX}/messages`)
+        .set('Authorization', await asUser())
+        .send({ subject: 's', body: '<p>x</p>', ...recipients })
+        .expect(400);
+      expect(messages.send).not.toHaveBeenCalled();
+    });
+
+    it('cupo superado → 429 con code, limit y remaining para el front', async () => {
+      messages.send.mockRejectedValueOnce(new RecipientLimitExceededException(500, 2, 5));
+      const res = await http()
+        .post(`/mailboxes/${MBX}/messages`)
+        .set('Authorization', await asUser())
+        .send({ to: 'a@b.com', subject: 's', body: '<p>x</p>' })
+        .expect(429);
+      expect(res.body).toEqual(
+        expect.objectContaining({
+          code: 'RECIPIENT_LIMIT_EXCEEDED',
+          limit: 500,
+          remaining: 2,
+          requested: 5,
+        }),
       );
     });
 

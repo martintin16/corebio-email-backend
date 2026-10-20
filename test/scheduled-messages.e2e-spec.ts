@@ -123,6 +123,19 @@ describe('Scheduled messages (e2e)', () => {
       expect(files.map((f) => f.originalname)).toEqual(['nota.txt']);
     });
 
+    it('solo con copia oculta (to vacío) vale; cc y bcc llegan al servicio', async () => {
+      await http()
+        .post('/scheduled-messages')
+        .set('Authorization', await auth())
+        .send({ ...valid(), to: '', cc: 'a@x.com', bcc: 'b@x.com, c@x.com' })
+        .expect(201);
+      expect(scheduled.create).toHaveBeenCalledWith(
+        USER_ID,
+        expect.objectContaining({ to: '', cc: 'a@x.com', bcc: 'b@x.com, c@x.com' }),
+        undefined,
+      );
+    });
+
     it('respuesta programada: alcanza con replyToMessageId, body y fecha', async () => {
       await http()
         .post('/scheduled-messages')
@@ -139,6 +152,8 @@ describe('Scheduled messages (e2e)', () => {
     it.each([
       ['sin destinatario (y no es respuesta)', { to: undefined }],
       ['email inválido', { to: 'no-es-email' }],
+      ['los tres destinatarios vacíos', { to: '', cc: '', bcc: '' }],
+      ['un email inválido en bcc', { bcc: 'bien@x.com, mal' }],
       ['sin fecha', { scheduledAt: undefined }],
       ['fecha que no es ISO', { scheduledAt: 'mañana a las 9' }],
       ['mailboxId que no es uuid', { mailboxId: 'mbx_1' }],
