@@ -39,11 +39,14 @@
     "dotenv": "^16.4.5",
     "googleapis": "^144.0.0",
     "helmet": "^8.0.0",
+    "html-to-text": "^9.0.5",
     "joi": "^17.13.3",
     "jose": "^5.9.6",
+    "nodemailer": "^6.9.16",
     "pg": "^8.13.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
+    "sanitize-html": "^2.13.1",
     "typeorm": "^0.3.20"
   },
   "devDependencies": {
@@ -52,8 +55,11 @@
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.0.0",
     "@types/express": "^5.0.0",
+    "@types/html-to-text": "^9.0.4",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.10.0",
+    "@types/nodemailer": "^6.4.17",
+    "@types/sanitize-html": "^2.13.0",
     "@types/supertest": "^6.0.2",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
@@ -79,7 +85,12 @@
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
-      "^.+\\.(t|j)s$": "ts-jest"
+      "^.+\\.(t|j)s$": [
+        "ts-jest",
+        {
+          "isolatedModules": true
+        }
+      ]
     },
     "collectCoverageFrom": [
       "**/*.(t|j)s",
@@ -88,6 +99,7 @@
       "!database/**"
     ],
     "coverageDirectory": "../coverage",
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "maxWorkers": "50%"
   }
 }

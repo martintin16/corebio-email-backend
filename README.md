@@ -51,14 +51,19 @@ Local Storage / cookies de Supabase → `access_token`).
 |---|---|
 | `npm run start:dev` | Levanta la API con recarga automática |
 | `npm run build` | Compila a `dist/` |
-| `npm run typecheck` | Chequea tipos de todo el proyecto (incluye tests) |
+| `npm run typecheck` | Chequea tipos de todo el proyecto (incluye tests). **Los tests no chequean tipos** (ver abajo) |
 | `npm run lint` | ESLint + Prettier |
 | `npm test` | Tests unitarios (`src/**/*.spec.ts`) |
 | `npm run test:e2e` | Tests de punta a punta sobre HTTP (`test/*.e2e-spec.ts`) |
 | `npm run test:cov` | Unitarios con cobertura |
 | `npm run migration:run` / `:revert` / `:show` | Migraciones contra la DB del `.env` |
 
-**Checklist antes de cada commit:** `npm run build && npm run lint && npm test && npm run test:e2e`.
+**Checklist antes de cada commit:** `npm run build && npm run typecheck && npm run lint && npm test && npm run test:e2e`.
+
+Jest corre con `maxWorkers: 50%` y ts-jest con `isolatedModules: true` (solo transpila,
+sin chequear tipos): con el chequeo completo en cada proceso, una máquina de 12 núcleos y
+16 GB quedaba al 100% de CPU, RAM y disco. Los tipos los siguen chequeando `build` y
+`typecheck`, por eso están en el checklist.
 
 ### Variables de entorno
 
@@ -117,7 +122,7 @@ src/
   google/                 OAuth con Google, encriptación de tokens, GoogleMailboxClient (Fase 3)
   users/                  user_profiles, gestión de usuarios e invitaciones (Fases 0 y 2)
   mailboxes/              casillas, permisos por casilla, @RequireMailboxAccess (Fase 1)
-  messages/               Fase 4 (módulo vacío)
+  messages/               Recibidos, Enviados, Redactar y Responder contra Gmail (Fase 4)
   scheduled-messages/     Fase 5 (módulo vacío)
   templates/              Fase 6 (módulo vacío)
   drive-access/           Fase 7 (módulo vacío)
@@ -173,6 +178,13 @@ Códigos de respuesta:
 | `POST /mailboxes/:id/reconnect` | admin | 3 | Primera conexión o reconexión con Google → `{ authUrl }` (llevar el navegador ahí) |
 | `GET /mailboxes/oauth/callback` | público | 3 | Vuelta de Google. Redirige a `<FRONTEND_URL>/admin/mailboxes?connected=<id>` o `?connectionError=<code>` |
 | `GET /me/mailboxes` | logueado | 1 | `Mailbox[]` a las que el usuario tiene algún permiso |
+| `GET /mailboxes/:id/messages` | `canRead` | 4 | Últimos 25 de Recibidos → `MessageSummary[]` |
+| `GET /mailboxes/:id/messages/:messageId` | `canRead` | 4 | `MessageDetail` (cuerpo en texto plano); lo marca como leído |
+| `POST /mailboxes/:id/messages` | `canSend` | 4 | Redactar: `{ to, subject, body }` + adjuntos (`attachments`, multipart) |
+| `POST /mailboxes/:id/messages/:messageId/reply` | `canSend` | 4 | Responder en el mismo hilo: `{ body }` + adjuntos |
+| `GET /mailboxes/:id/sent` | `canRead` | 4 | Últimos 25 de Enviados → `SentMessageSummary[]` |
+| `GET /mailboxes/:id/sent/:sentId` | `canRead` | 4 | `SentMessageDetail` (cuerpo en HTML sanitizado) |
+| `GET /sent/:sentId` | `canRead` en la casilla | 4 | Para "Reenviar": busca el enviado en las casillas que la persona puede leer |
 | `GET /users` | admin | 2 | `AdminUser[]` |
 | `POST /users` | admin | 2 | `{ name, email, role, access }` → invita y devuelve `AdminUser` (201; 409 si el email existe) |
 | `PATCH /users/:id/permissions` | admin | 2 | `{ role, access }` (reemplaza todos los permisos) → `AdminUser` |
@@ -462,9 +474,58 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
   revocado en Google).
 - Ajuste posterior: incluir `mailboxId` cuando Google devuelve un error con `state` válido.
 
+### ✅ Fase 4 — Recibidos, Enviados, Redactar y Responder (Gmail API)
+
+**Qué se construyó**
+- Módulo `messages/`: endpoints de la tabla de arriba, todos detrás de
+  `@RequireMailboxAccess` (`read` para leer, `send` para enviar y responder).
+- Parseo de Gmail (`gmail/gmail-message.ts`): direcciones, encabezados (incluye
+  RFC 2047), cuerpos en partes anidadas con su charset, entidades del `snippet`, fechas.
+- Contenido (`content/html-content.ts`): sanitizador de HTML (`sanitize-html`) y
+  conversión HTML ↔ texto (`html-to-text`).
+- Armado del mensaje (`gmail/mime.ts`) con el generador MIME de `nodemailer`; el envío lo
+  hace la Gmail API como subida `message/rfc822`.
+- Adjuntos: `multipart/form-data`, campo `attachments`, hasta 10 archivos y 20 MB en total.
+- Jest más liviano (`maxWorkers: 50%`, ts-jest `isolatedModules`).
+- Tests unitarios (parseo, sanitizador, MIME, adjuntos, concurrencia, servicio con Gmail
+  simulado) y e2e (permisos read/send, validaciones, multipart, límites).
+
+**Decisiones**
+- **Recibidos: cuerpo en texto plano.** El frontend lo muestra como texto (`{message.body}`);
+  devolver HTML mostraría etiquetas y abriría la puerta a XSS. Se usa la parte
+  `text/plain`, o el HTML sanitizado convertido a texto.
+- **Enviados: cuerpo en HTML sanitizado en el backend.** El frontend lo renderiza con
+  `dangerouslySetInnerHTML`, y Enviados también tiene mails mandados desde Gmail y
+  reenvíos con HTML de terceros. Se quitan scripts, iframes, formularios, `on*`,
+  `javascript:` y CSS de posicionamiento; los links abren con `rel="noopener noreferrer"`.
+  Lo que se envía desde Redactar/Responder pasa por el mismo filtro.
+- **Abrir un recibido lo marca como leído** (como Gmail). Si eso falla, igual se muestra.
+- **Responder** va a `Reply-To` (o `From`), con "Re: " sin duplicar e `In-Reply-To` /
+  `References`, en el mismo `threadId`: Gmail lo agrupa en el hilo.
+- **Remitente:** `"<nombre visible de la casilla>" <email de la casilla>`.
+- **Sin paginación:** el contrato devuelve un array; se traen los 25 más recientes, con
+  5 pedidos de detalle en paralelo como máximo (cuota de la Gmail API). Pendiente:
+  `?pageToken=`.
+- **`GET /sent/:sentId`** prueba en cada casilla con `canRead` hasta encontrarlo (saltea las
+  desconectadas). Mejor sería que el frontend mande la casilla (pendiente de contrato).
+- **Errores:** mensaje inexistente → 404; casilla sin conexión válida → 409
+  `mailbox_needs_reconnect`; otro error de Google → 502; id con formato inválido → 400;
+  adjuntos de más → 400; adjuntos que superan 20 MB → 413.
+- **Adjuntos de mensajes recibidos: no se exponen** (el contrato no los incluye).
+
+**Cambios de contrato con el frontend (para la mini-fase front↔back)**
+- Redactar/Responder: multipart con los archivos en `attachments` (o JSON sin adjuntos).
+- Recomendado: que "Reenviar" pase también la casilla (`/compose?forward=<id>&mailbox=<id>`).
+
+**Verificación**
+- ⚠️ Suma dependencias (`nodemailer`, `sanitize-html`, `html-to-text` y sus tipos): correr
+  **`npm install`** y commitear el lockfile.
+- A verificar en local: `build`, `typecheck`, `lint`, `test`, `test:e2e`.
+- A verificar contra Gmail: listar y abrir recibidos (se marcan como leídos), listar y abrir
+  enviados, redactar con y sin adjuntos, responder (queda en el mismo hilo), permisos.
+
 ### ⏳ Pendiente
 
-- **Fase 4 — Messages/Sent** (Gmail API).
 - **Fase 5 — Scheduled messages** (tabla + job periódico).
 - **Fase 6 — Templates.**
 - **Fase 7 — Drive access** (Drive API).

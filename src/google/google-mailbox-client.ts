@@ -19,6 +19,8 @@ export interface MailboxGoogleApis {
   mailboxId: string;
   /** Email de la casilla (el "me" de Gmail). */
   email: string;
+  /** Nombre visible de la casilla (va como nombre del remitente al enviar). */
+  displayName: string;
   gmail: gmail_v1.Gmail;
   drive: drive_v3.Drive;
 }
@@ -145,6 +147,7 @@ export class DefaultGoogleMailboxClient extends GoogleMailboxClient {
     return {
       mailboxId,
       email: mailbox.email,
+      displayName: mailbox.displayName,
       gmail: google.gmail({ version: 'v1', auth: client }),
       drive: google.drive({ version: 'v3', auth: client }),
     };

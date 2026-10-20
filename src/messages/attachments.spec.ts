@@ -1,0 +1,47 @@
+import { PayloadTooLargeException } from '@nestjs/common';
+import { MAX_ATTACHMENTS_TOTAL_BYTES, toOutgoingAttachments } from './attachments';
+import { mapWithConcurrency } from '../common/concurrency';
+
+const file = (name: string, size: number) => ({
+  originalname: name,
+  mimetype: '',
+  size,
+  buffer: Buffer.alloc(1),
+});
+
+describe('toOutgoingAttachments', () => {
+  it('sin archivos devuelve []', () => {
+    expect(toOutgoingAttachments(undefined)).toEqual([]);
+  });
+
+  it('convierte y completa el tipo si falta', () => {
+    expect(toOutgoingAttachments([file('a.pdf', 10)])).toEqual([
+      { filename: 'a.pdf', contentType: 'application/octet-stream', content: Buffer.alloc(1) },
+    ]);
+  });
+
+  it('413 si el total supera el límite', () => {
+    expect(() =>
+      toOutgoingAttachments([
+        file('a', MAX_ATTACHMENTS_TOTAL_BYTES / 2),
+        file('b', MAX_ATTACHMENTS_TOTAL_BYTES / 2 + 1),
+      ]),
+    ).toThrow(PayloadTooLargeException);
+  });
+});
+
+describe('mapWithConcurrency', () => {
+  it('respeta el orden y el límite de concurrencia', async () => {
+    let running = 0;
+    let maxRunning = 0;
+    const result = await mapWithConcurrency([1, 2, 3, 4, 5, 6], 2, async (n) => {
+      running++;
+      maxRunning = Math.max(maxRunning, running);
+      await new Promise((r) => setTimeout(r, 5));
+      running--;
+      return n * 10;
+    });
+    expect(result).toEqual([10, 20, 30, 40, 50, 60]);
+    expect(maxRunning).toBe(2);
+  });
+});
