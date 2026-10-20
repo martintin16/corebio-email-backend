@@ -41,12 +41,21 @@ const MAX_PAGES = 10;
 interface SharedState {
   /** Ítems con un permiso propio para esa cuenta (los que se tildan). */
   direct: Map<string, string | null>;
-  /** Ítems a los que llega solo por estar dentro de una carpeta compartida. */
-  inherited: Set<string>;
+  /**
+   * Ítems a los que llega solo por estar dentro de una carpeta compartida, con
+   * el rol que hereda.
+   */
+  inherited: Map<string, { name: string | null; role: string | null }>;
 }
 
 /** Falla al quitar un permiso; `inherited` = el permiso viene de una carpeta. */
 type UnshareFailure = DriveAccessFailure & { inherited?: boolean };
+
+export const COVERED_BY_FOLDER_REASON =
+  'Ya tiene acceso como Editor por la carpeta que lo contiene';
+
+/** Roles que ya incluyen lo que da compartir como Editor. */
+const WRITER_OR_ABOVE = new Set(['writer', 'fileOrganizer', 'organizer', 'owner']);
 
 export const INHERITED_REASON =
   'Tiene acceso por la carpeta que lo contiene: para quitárselo, dejá de compartir esa carpeta';
@@ -137,9 +146,24 @@ export class DriveAccessService {
     }
 
     const desired = new Set(itemIds);
-    const current = (await this.sharedState(apis, user.email)).direct;
-    const toAdd = [...desired].filter((id) => !current.has(id));
+    const state = await this.sharedState(apis, user.email);
+    const current = state.direct;
     const toRemove = [...current.keys()].filter((id) => !desired.has(id));
+
+    // En Mi unidad, si la persona ya hereda Editor de la carpeta, Drive no crea
+    // un permiso propio aunque `permissions.create` responda OK: no se pide, y
+    // vuelve en `skipped` (ya tiene el acceso pedido).
+    const skipped: DriveAccessFailure[] = [];
+    const toAdd: string[] = [];
+    for (const id of desired) {
+      if (current.has(id)) continue;
+      const inherited = state.inherited.get(id);
+      if (inherited && WRITER_OR_ABOVE.has(inherited.role ?? '')) {
+        skipped.push({ id, name: inherited.name, reason: COVERED_BY_FOLDER_REASON });
+      } else {
+        toAdd.push(id);
+      }
+    }
 
     const failed: DriveAccessFailure[] = [];
     const added = (
@@ -157,7 +181,7 @@ export class DriveAccessService {
       })
     ).filter((id): id is string => id !== null);
 
-    return { added, removed, failed };
+    return { added, removed, skipped, failed };
   }
 
   // ---------------------------------------------------------------------------
@@ -233,7 +257,7 @@ export class DriveAccessService {
     const ids = new Set(files.map((f) => f.id));
 
     const direct = new Map<string, string | null>();
-    const inherited = new Set<string>();
+    const inherited: SharedState['inherited'] = new Map();
     const suspects = files.filter((f) => (f.parents ?? []).some((p) => ids.has(p)));
     for (const f of files) if (!suspects.includes(f)) direct.set(f.id, f.name ?? null);
 
@@ -246,7 +270,7 @@ export class DriveAccessService {
         return this.google.handleGoogleError(apis.mailboxId, err);
       }
       if (permissions.some(isDirectPermission)) direct.set(f.id, f.name ?? null);
-      else inherited.add(f.id);
+      else inherited.set(f.id, { name: f.name ?? null, role: highestRole(permissions) });
     });
     return { direct, inherited };
   }
@@ -414,6 +438,17 @@ function isInheritedOnly(p: drive_v3.Schema$Permission): boolean {
 /** "The authenticated user cannot delete the permission. If the permission is inherited…" */
 function isInheritedPermissionError(err: unknown): boolean {
   return err instanceof Error && /inherited/i.test(err.message);
+}
+
+const ROLE_RANK = ['reader', 'commenter', 'writer', 'fileOrganizer', 'organizer', 'owner'];
+
+/** El rol más alto entre los permisos de la cuenta sobre un ítem. */
+function highestRole(permissions: drive_v3.Schema$Permission[]): string | null {
+  let best: string | null = null;
+  for (const p of permissions) {
+    if (p.role && ROLE_RANK.indexOf(p.role) > ROLE_RANK.indexOf(best ?? '')) best = p.role;
+  }
+  return best;
 }
 
 function withoutKind(failure: UnshareFailure): DriveAccessFailure {

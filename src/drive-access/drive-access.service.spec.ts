@@ -10,7 +10,12 @@ import {
   MailboxNeedsReconnectException,
 } from '../google/google-mailbox-client';
 import type { MailboxAccessService } from '../mailboxes/mailbox-access.service';
-import { DriveAccessService, INHERITED_REASON, SHARE_ROLE } from './drive-access.service';
+import {
+  COVERED_BY_FOLDER_REASON,
+  DriveAccessService,
+  INHERITED_REASON,
+  SHARE_ROLE,
+} from './drive-access.service';
 import {
   driveAccountEmail,
   driveQueryValue,
@@ -175,7 +180,7 @@ describe('DriveAccessService', () => {
       ];
       const result = await service.applyAccess(MBX, USER, ['keep', 'new1']);
 
-      expect(result).toEqual({ added: ['new1'], removed: ['drop'], failed: [] });
+      expect(result).toEqual({ added: ['new1'], removed: ['drop'], skipped: [], failed: [] });
       expect(drive.permissions.create).toHaveBeenCalledTimes(1);
       expect(drive.permissions.create).toHaveBeenCalledWith({
         fileId: 'new1',
@@ -329,12 +334,47 @@ describe('DriveAccessService', () => {
 
     it('dejar de compartir la carpeta no intenta quitar los heredados', async () => {
       const result = await service.applyAccess(MBX, USER, ['propio']);
-      expect(result).toEqual({ added: [], removed: ['carpeta'], failed: [] });
+      expect(result).toEqual({ added: [], removed: ['carpeta'], skipped: [], failed: [] });
       expect(drive.permissions.delete).toHaveBeenCalledTimes(1);
       expect(drive.permissions.delete).toHaveBeenCalledWith({
         fileId: 'carpeta',
         permissionId: 'p-carpeta',
       });
+    });
+
+    it('lo que ya hereda Editor de la carpeta no se pide de nuevo: va a skipped', async () => {
+      const result = await service.applyAccess(MBX, USER, ['carpeta', 'propio', 'hijo']);
+      expect(result).toEqual({
+        added: [],
+        removed: [],
+        skipped: [{ id: 'hijo', name: 'Hijo.pdf', reason: COVERED_BY_FOLDER_REASON }],
+        failed: [],
+      });
+      expect(drive.permissions.create).not.toHaveBeenCalled();
+    });
+
+    it('si hereda solo Lector (compartido a mano), sí se comparte como Editor', async () => {
+      drive.permissions.list.mockImplementation(({ fileId }: { fileId: string }) =>
+        Promise.resolve({
+          data: {
+            permissions: [
+              {
+                id: `p-${fileId}`,
+                type: 'user',
+                role: fileId === 'carpeta' ? 'writer' : 'reader',
+                emailAddress: 'ana@gmail.com',
+                permissionDetails: [{ inherited: fileId !== 'carpeta' }],
+              },
+            ],
+          },
+        }),
+      );
+      const result = await service.applyAccess(MBX, USER, ['carpeta', 'hijo']);
+      expect(result.added).toEqual(['hijo']);
+      expect(result.skipped).toEqual([]);
+      expect(drive.permissions.create).toHaveBeenCalledWith(
+        expect.objectContaining({ fileId: 'hijo' }),
+      );
     });
 
     it('si Google igual dice "inherited", el motivo es claro y trae el nombre', async () => {

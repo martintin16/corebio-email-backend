@@ -27,6 +27,12 @@ export interface DriveAccessResult {
   added: string[];
   /** Ids a los que se le quitó el acceso. */
   removed: string[];
+  /**
+   * Tildados que no hacía falta compartir: la persona ya tiene acceso como
+   * Editor por la carpeta que los contiene (en Mi unidad, Drive no crea un
+   * permiso propio en ese caso).
+   */
+  skipped: DriveAccessFailure[];
   /** Los que no se pudieron cambiar (el resto sí se aplicó). */
   failed: DriveAccessFailure[];
 }

@@ -200,7 +200,7 @@ Códigos de respuesta:
 | `DELETE /templates/:id` | `canSend` en su casilla | 6 | Borra → 204 |
 | `GET /mailboxes/:id/drive/items?userId=…&folderId=root` | admin | 7 | Contenido de una carpeta del Drive de la casilla → `DriveItem[]` (`shared` = compartido directamente con esa persona; `inherited` = accede por una carpeta) |
 | `GET /mailboxes/:id/drive/shared?userId=…` | admin | 7 | Ids de lo compartido directamente con la persona en ese Drive |
-| `PUT /mailboxes/:id/drive/access/:userId` | admin | 7 | `{ itemIds }` (selección final) → comparte lo nuevo como Editor y quita lo destildado → `{ added, removed, failed }` |
+| `PUT /mailboxes/:id/drive/access/:userId` | admin | 7 | `{ itemIds }` (selección final) → comparte lo nuevo como Editor y quita lo destildado → `{ added, removed, skipped, failed }` |
 | `GET /users` | admin | 2 | `AdminUser[]` |
 | `POST /users` | admin | 2 | `{ name, email, role, access }` → invita y devuelve `AdminUser` (201; 409 si el email existe) |
 | `PATCH /users/:id/permissions` | admin | 2·7 | `{ role, access }` (reemplaza todos los permisos) → `AdminUser`. Las casillas que pierde le quitan lo compartido en su Drive |
@@ -745,6 +745,11 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
   `permissionDetails`; si Google no lo informa (en Mi unidad no siempre viene), se toma como
   heredado. Si igual Google responde "inherited" al quitar, el motivo dice que hay que dejar
   de compartir la carpeta, y en la revocación automática no cuenta como falla.
+- **Compartir aparte algo que ya cubre una carpeta**: en Mi unidad, si la persona ya hereda
+  Editor de la carpeta, Drive no crea un permiso propio aunque `permissions.create` responda
+  OK. Por eso no se pide: el ítem vuelve en `skipped` ("Ya tiene acceso como Editor por la
+  carpeta que lo contiene"), ni en `added` ni en `failed`. Si lo que hereda es solo Lector
+  (una carpeta compartida a mano), sí se comparte como Editor.
 - **Solo se tocan ítems de los que la casilla es dueña** (`'me' in owners`): nunca se le quita
   a nadie un acceso que le dio otra persona, ni el permiso de dueño.
 - **La persona tiene que tener acceso a la casilla en la app** (si no, 400) y estar activa
@@ -767,7 +772,8 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
 **Cambios de contrato con el frontend (para la mini-fase front↔back)**
 - `shared` y "lo ya compartido" son **por persona**: el explorador y `getDriveSharedItemIds`
   tienen que mandar `userId` (en el mock no dependían de la persona).
-- `DriveItem` suma `inherited`: mostrar esos ítems sin tildar con un "acceso por carpeta".
+- `DriveItem` suma `inherited`: mostrar esos ítems como "acceso por carpeta", sin casilla
+  para tildar. El resultado de guardar suma `skipped` (no es un error).
 - `updateDriveAccess` → `PUT /mailboxes/:id/drive/access/:userId` con `{ itemIds }`; mostrar
   los `failed` con su motivo en vez de un "ok" a secas.
 
@@ -781,6 +787,8 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
   de Drive devuelve también lo heredado); en cada guardado y en la revocación se intentaba
   borrar ese permiso heredado y Google lo rechazaba (errores falsos en `failed`, con el motivo
   cortado y sin nombre). Ahora se separa directo de heredado (ver Decisiones).
+- ❌→ corregido: compartir un archivo de adentro de una carpeta ya compartida respondía
+  `added`, pero Drive no creaba el permiso propio. Ahora va a `skipped` (ver Decisiones).
 
 ### ⏳ Pendiente
 
