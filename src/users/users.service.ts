@@ -2,6 +2,7 @@ import { ConflictException, Injectable, Logger, NotFoundException } from '@nestj
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
+import { DriveAccessService } from '../drive-access/drive-access.service';
 import { MailboxAccessService } from '../mailboxes/mailbox-access.service';
 import { MailboxesService } from '../mailboxes/mailboxes.service';
 import type { CreateUserDto } from './dto/create-user.dto';
@@ -43,6 +44,7 @@ export class UsersService {
     private readonly mailboxes: MailboxesService,
     private readonly supabase: SupabaseAdminClient,
     config: ConfigService,
+    private readonly driveAccess: DriveAccessService,
   ) {
     const frontendUrl = config.getOrThrow<string>('FRONTEND_URL').replace(/\/+$/, '');
     this.inviteRedirectTo = `${frontendUrl}/reset-password`;
@@ -164,6 +166,8 @@ export class UsersService {
    * Cambia rol y permisos (reemplazo completo). Un admin no puede quitarse el
    * rol a sí mismo: como quien hace el pedido es siempre un admin activo, esa
    * regla alcanza para que nunca se quede el sistema sin administradores.
+   * Las casillas que pierde por completo también le quitan lo compartido en su
+   * Drive (Fase 7).
    */
   async updatePermissions(
     actorId: string,
@@ -174,6 +178,7 @@ export class UsersService {
     if (id === actorId && dto.role !== 'admin') {
       throw new ConflictException('No podés quitarte el rol de administrador a vos mismo');
     }
+    const before = await this.findAdminUser(id);
 
     await this.dataSource.transaction(async (em) => {
       await em.update(UserProfile, { id }, { role: dto.role });
@@ -191,13 +196,21 @@ export class UsersService {
       });
     }
 
-    return this.findAdminUser(id);
+    const after = await this.findAdminUser(id);
+    const kept = new Set(after.mailboxAccess.map((a) => a.mailboxId));
+    await this.revokeDrive(
+      before.email,
+      before.mailboxAccess.map((a) => a.mailboxId).filter((mailboxId) => !kept.has(mailboxId)),
+    );
+    return after;
   }
 
   /**
    * Desactiva: el guard lo bloquea en el próximo request (status en la base) y
    * además se banea en Supabase Auth para que no pueda loguearse ni renovar su
    * token. Es idempotente: si el ban falla (502), se puede reintentar.
+   * También le quita lo compartido en el Drive de sus casillas (Fase 7); los
+   * permisos en la app se conservan por si se lo vuelve a activar.
    */
   async deactivate(actorId: string, id: string): Promise<AdminUser> {
     if (id === actorId) throw new ConflictException('No podés desactivarte a vos mismo');
@@ -206,14 +219,28 @@ export class UsersService {
     await this.profiles.update({ id }, { status: 'inactive' });
     await this.supabase.banUser(id);
 
-    return this.findAdminUser(id);
+    const user = await this.findAdminUser(id);
+    await this.revokeDrive(
+      user.email,
+      user.mailboxAccess.map((a) => a.mailboxId),
+    );
+    return user;
   }
 
-  /** Borra el usuario de Supabase Auth; perfil y permisos se borran en cascada. */
+  /**
+   * Borra el usuario de Supabase Auth; perfil y permisos se borran en cascada.
+   * Antes de borrarlo se anotan email y casillas para quitarle lo compartido en
+   * sus Drives (Fase 7).
+   */
   async remove(actorId: string, id: string): Promise<void> {
     if (id === actorId) throw new ConflictException('No podés borrarte a vos mismo');
     await this.getProfileOrThrow(id);
+    const user = await this.findAdminUser(id);
     await this.supabase.deleteUser(id);
+    await this.revokeDrive(
+      user.email,
+      user.mailboxAccess.map((a) => a.mailboxId),
+    );
   }
 
   /** Solo para usuarios que todavía no aceptaron la invitación. */
@@ -226,6 +253,17 @@ export class UsersService {
   }
 
   // ---------------------------------------------------------------------------
+
+  /**
+   * Quita lo compartido en el Drive de esas casillas. Nunca falla: el cambio en
+   * la app ya está hecho; lo que no se pudo quitar queda en el log
+   * (DriveAccessService) para hacerlo a mano.
+   */
+  private async revokeDrive(email: string, mailboxIds: string[]): Promise<void> {
+    for (const mailboxId of mailboxIds) {
+      await this.driveAccess.revokeAllForEmail(mailboxId, email);
+    }
+  }
 
   private async getProfileOrThrow(id: string): Promise<UserProfile> {
     const profile = await this.profiles.findOneBy({ id });

@@ -126,7 +126,7 @@ src/
   messages/               Recibidos, Enviados, Redactar, Responder y adjuntos contra Gmail (Fases 4 y 4.5)
   scheduled-messages/     envíos programados: tabla, borradores de Gmail y job por minuto (Fase 5)
   templates/              plantillas por casilla (Fase 6)
-  drive-access/           Fase 7 (módulo vacío)
+  drive-access/           compartir carpetas y archivos del Drive de una casilla (Fase 7)
 test/
   utils/jwt.ts            simula a Supabase Auth con claves ES256 propias
   utils/test-app.ts       app de prueba con la auth real y Supabase/DB simulados
@@ -198,11 +198,14 @@ Códigos de respuesta:
 | `GET /templates/:id` | `canSend` en su casilla | 6 | `MessageTemplate` (404 si no tiene `canSend`) |
 | `PATCH /templates/:id` | `canSend` en su casilla | 6 | `{ name?, subject?, body? }` (`subject: null` lo quita) → `MessageTemplate` |
 | `DELETE /templates/:id` | `canSend` en su casilla | 6 | Borra → 204 |
+| `GET /mailboxes/:id/drive/items?userId=…&folderId=root` | admin | 7 | Contenido de una carpeta del Drive de la casilla → `DriveItem[]` (`shared` según esa persona) |
+| `GET /mailboxes/:id/drive/shared?userId=…` | admin | 7 | Ids de todo lo que la persona ya tiene compartido en ese Drive |
+| `PUT /mailboxes/:id/drive/access/:userId` | admin | 7 | `{ itemIds }` (selección final) → comparte lo nuevo como Editor y quita lo destildado → `{ added, removed, failed }` |
 | `GET /users` | admin | 2 | `AdminUser[]` |
 | `POST /users` | admin | 2 | `{ name, email, role, access }` → invita y devuelve `AdminUser` (201; 409 si el email existe) |
-| `PATCH /users/:id/permissions` | admin | 2 | `{ role, access }` (reemplaza todos los permisos) → `AdminUser` |
-| `PATCH /users/:id/deactivate` | admin | 2 | Desactiva y banea en Supabase Auth → `AdminUser` |
-| `DELETE /users/:id` | admin | 2 | Borra de Supabase Auth (perfil y permisos en cascada) → 204 |
+| `PATCH /users/:id/permissions` | admin | 2·7 | `{ role, access }` (reemplaza todos los permisos) → `AdminUser`. Las casillas que pierde le quitan lo compartido en su Drive |
+| `PATCH /users/:id/deactivate` | admin | 2·7 | Desactiva, banea en Supabase Auth y quita lo compartido en el Drive de sus casillas → `AdminUser` |
+| `DELETE /users/:id` | admin | 2·7 | Borra de Supabase Auth (perfil y permisos en cascada) y quita lo compartido en sus Drives → 204 |
 | `POST /users/:id/resend-invite` | admin | 2 | Reenvía la invitación (solo `invited`; si no, 409) → 204 |
 | `GET /mailboxes/:id/access` | admin | 2 | `{ user: AdminUser, access }[]` de esa casilla |
 
@@ -713,6 +716,61 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
   asunto con `subject: null`, borrar → 204. Sin `canSend` (admin con solo lectura en una
   casilla) → lista 403 y detalle 404.
 
+### ✅ Fase 7 — Acceso a Drive
+
+**Qué se construyó**
+- Módulo `drive-access/` con los endpoints de la tabla de arriba (solo admin), para
+  "Gestionar Drive" en Editar permisos: explorar el Drive de la casilla de a una carpeta y
+  elegir qué se comparte con una persona. Usa el permiso de Google de la casilla (el scope
+  `drive` se pidió en la Fase 3).
+- Guardar recibe la selección final, la compara con lo que ya está compartido, comparte lo
+  nuevo y quita lo destildado. Cada ítem se aplica por separado: lo que falla vuelve en
+  `failed` con el motivo y el resto se aplica igual.
+- **Revocación automática** en `UsersService`: cuando una persona pierde por completo una
+  casilla (cambio de permisos), la desactivan o la borran, se le quita todo lo compartido en
+  el Drive de esa casilla.
+- Tests unitarios (comparación, filtros de seguridad, errores de Google, revocación) y e2e
+  (solo admin, validaciones).
+
+**Decisiones**
+- **Se comparte como Editor** (decisión de la fase): hoy todos entran con la contraseña y
+  tienen acceso total; con Lector se cortarían usos normales. El front no tiene selector.
+- **Drive es la fuente de verdad, sin tabla propia**: "compartido" = esa cuenta tiene acceso
+  de lectura o edición al ítem en Drive. Lo compartido a mano desde Drive también aparece
+  tildado, y destildarlo en la app lo quita.
+- **Solo se tocan ítems de los que la casilla es dueña** (`'me' in owners`): nunca se le quita
+  a nadie un acceso que le dio otra persona, ni el permiso de dueño.
+- **La persona tiene que tener acceso a la casilla en la app** (si no, 400) y estar activa
+  para compartirle (si no, 409). Mi unidad entera, ítems en la papelera o de otro dueño → en
+  `failed` con el motivo.
+- **Google le avisa por mail** a la persona cuando le comparten algo (lo encuentra en
+  "Compartidos conmigo").
+- **`+alias` de Gmail**: `ana+algo@gmail.com` es la misma cuenta de Google que
+  `ana@gmail.com`, así que Drive comparte con la cuenta. Las búsquedas y comparaciones se
+  hacen sin el `+algo`. Ojo al probar con alias: dos usuarios de la app con alias de la misma
+  cuenta son, para Drive, la misma persona.
+- **La revocación nunca frena el cambio en la app**: primero se aplica el cambio de
+  permisos, la desactivación o el borrado; después se quita lo de Drive. Si Google falla (o la
+  casilla necesita reconectarse), queda en el log con cuántos ítems no se pudieron quitar,
+  para hacerlo a mano. Desactivar conserva los permisos en la app (por si se reactiva), pero
+  el Drive se quita igual.
+- **El admin ve nombres de carpetas y archivos de la casilla** (no contenidos) aunque no
+  tenga `canRead`: es su herramienta de gestión, como la diseñó el front.
+
+**Cambios de contrato con el frontend (para la mini-fase front↔back)**
+- `shared` y "lo ya compartido" son **por persona**: el explorador y `getDriveSharedItemIds`
+  tienen que mandar `userId` (en el mock no dependían de la persona).
+- `updateDriveAccess` → `PUT /mailboxes/:id/drive/access/:userId` con `{ itemIds }`; mostrar
+  los `failed` con su motivo en vez de un "ok" a secas.
+
+**Verificación**
+- A correr: `lint`, `typecheck`, `test`, `test:e2e` (no hay migración en esta fase).
+- A verificar contra Drive: explorar carpetas, compartir una carpeta y un archivo (le llega el
+  mail de Google y aparece como Editor), destildar (se le quita), y que quitarle la casilla a
+  la persona le quite lo compartido.
+
 ### ⏳ Pendiente
 
-- **Fase 7 — Drive access** (Drive API).
+- **Mini-fase front↔back**: conectar el frontend al backend (los cambios de contrato están en
+  cada fase).
+- **Deploy en Railway** (ver "Puesta en producción").

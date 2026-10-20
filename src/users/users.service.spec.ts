@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { DataSource, EntityManager, Repository } from 'typeorm';
+import type { DriveAccessService } from '../drive-access/drive-access.service';
 import type { MailboxAccessService } from '../mailboxes/mailbox-access.service';
 import type { MailboxesService } from '../mailboxes/mailboxes.service';
 import { UserProfile } from './entities/user-profile.entity';
@@ -54,6 +55,7 @@ describe('UsersService', () => {
     banUser: jest.Mock;
     deleteUser: jest.Mock;
   };
+  let driveAccess: { revokeAllForEmail: jest.Mock };
   /** Filas que devuelve la consulta "¿el email ya existe en auth.users?". */
   let existingEmails: unknown[];
   /** Filas que devuelven las consultas de AdminUser. */
@@ -89,6 +91,7 @@ describe('UsersService', () => {
       findUsersWithAccess: jest.fn().mockResolvedValue([]),
     };
     mailboxes = { findForAdmin: jest.fn().mockResolvedValue({ id: MBX }) };
+    driveAccess = { revokeAllForEmail: jest.fn().mockResolvedValue({ removed: 0 }) };
     supabase = {
       inviteUser: jest.fn().mockResolvedValue(USER),
       resendInvite: jest.fn().mockResolvedValue('invite'),
@@ -103,6 +106,7 @@ describe('UsersService', () => {
       mailboxes as unknown as MailboxesService,
       supabase,
       new ConfigService({ FRONTEND_URL: 'https://front.test/' }),
+      driveAccess as unknown as DriveAccessService,
     );
   });
 
@@ -257,6 +261,24 @@ describe('UsersService', () => {
       supabase.setAppRole.mockRejectedValue(new BadGatewayException());
       await expect(service.updatePermissions(ADMIN, USER, dto)).resolves.toBeDefined();
     });
+
+    it('si pierde una casilla por completo, le quita lo compartido en su Drive', async () => {
+      mailboxAccess.findSummariesByUser
+        .mockResolvedValueOnce(
+          new Map([[USER, [{ mailboxId: MBX, email: 't', canSend: true, canRead: true }]]]),
+        )
+        .mockResolvedValueOnce(new Map([[USER, []]]));
+      await service.updatePermissions(ADMIN, USER, { role: 'user', access: {} });
+      expect(driveAccess.revokeAllForEmail).toHaveBeenCalledWith(MBX, 'ana@gmail.com');
+    });
+
+    it('si conserva la casilla (aunque cambien los permisos), no toca el Drive', async () => {
+      await service.updatePermissions(ADMIN, USER, {
+        role: 'user',
+        access: { [MBX]: { canSend: false, canRead: true } },
+      });
+      expect(driveAccess.revokeAllForEmail).not.toHaveBeenCalled();
+    });
   });
 
   describe('deactivate', () => {
@@ -274,6 +296,11 @@ describe('UsersService', () => {
       expect(profiles.update).toHaveBeenCalledWith({ id: USER }, { status: 'inactive' });
       expect(supabase.banUser).toHaveBeenCalledWith(USER);
     });
+
+    it('le quita lo compartido en el Drive de todas sus casillas', async () => {
+      await service.deactivate(ADMIN, USER);
+      expect(driveAccess.revokeAllForEmail).toHaveBeenCalledWith(MBX, 'ana@gmail.com');
+    });
   });
 
   describe('remove', () => {
@@ -290,6 +317,20 @@ describe('UsersService', () => {
     it('borra el usuario de Supabase Auth', async () => {
       await service.remove(ADMIN, USER);
       expect(supabase.deleteUser).toHaveBeenCalledWith(USER);
+    });
+
+    it('después de borrarlo, le quita lo compartido en el Drive de sus casillas', async () => {
+      await service.remove(ADMIN, USER);
+      expect(driveAccess.revokeAllForEmail).toHaveBeenCalledWith(MBX, 'ana@gmail.com');
+      expect(supabase.deleteUser.mock.invocationCallOrder[0]).toBeLessThan(
+        driveAccess.revokeAllForEmail.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('si falla el borrado en Supabase, no toca el Drive', async () => {
+      supabase.deleteUser.mockRejectedValue(new BadGatewayException());
+      await expect(service.remove(ADMIN, USER)).rejects.toBeInstanceOf(BadGatewayException);
+      expect(driveAccess.revokeAllForEmail).not.toHaveBeenCalled();
     });
   });
 
