@@ -789,6 +789,10 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
   cortado y sin nombre). Ahora se separa directo de heredado (ver Decisiones).
 - ❌→ corregido: compartir un archivo de adentro de una carpeta ya compartida respondía
   `added`, pero Drive no creaba el permiso propio. Ahora va a `skipped` (ver Decisiones).
+- ✅ Re-verificado tras las correcciones (`lint`, `typecheck`, `test` 371, `test:e2e` 143):
+  compartir la carpeta → `added`; carpeta + archivo de adentro → archivo en `skipped`;
+  `/drive/shared` solo con la carpeta; `[]` → `removed` sin fallas; quitar la casilla revoca
+  sin advertencias en el log.
 
 ### ⏳ Pendiente
 
