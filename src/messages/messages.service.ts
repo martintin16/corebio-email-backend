@@ -36,6 +36,7 @@ import {
   replySubject,
 } from './gmail/gmail-message';
 import { buildRawMessage, type OutgoingAttachment } from './gmail/mime';
+import { USER_LABEL_ID } from './pipes/parse-gmail-id.pipe';
 import { joinRecipients, recipientCount, resolveRecipients } from './recipients';
 import {
   isGmailSendingLimitError,
@@ -46,6 +47,7 @@ import type {
   AttachmentInfo,
   DownloadedAttachment,
   ForwardedAttachmentRef,
+  MailLabel,
   MessageDetail,
   MessageSummary,
   SentMessageDetail,
@@ -87,6 +89,7 @@ export interface AttachmentSources {
 }
 
 const NOT_FOUND_MESSAGE = 'El mensaje no existe';
+
 const FORWARDED_NOT_FOUND = 'Un adjunto reenviado no existe en esta casilla';
 const KEPT_NOT_FOUND = 'Uno de los adjuntos a conservar ya no existe';
 export const DRAFT_NOT_FOUND = 'El borrador ya no existe en Gmail';
@@ -130,10 +133,87 @@ export class MessagesService {
   // Recibidos
   // ---------------------------------------------------------------------------
 
-  async listInbox(mailboxId: string): Promise<MessageSummary[]> {
+  /**
+   * Últimos de Recibidos, o con `labelId` los de esa etiqueta (estén o no en
+   * Recibidos: una etiqueta también agrupa mails archivados).
+   */
+  async listInbox(mailboxId: string, labelId?: string): Promise<MessageSummary[]> {
     const apis = await this.google.forMailbox(mailboxId);
-    const messages = await this.listByLabel(apis, 'INBOX', ['From', 'Subject', 'Date']);
+    const messages = await this.listByLabel(apis, labelId ?? 'INBOX', ['From', 'Subject', 'Date']);
     return messages.map(toMessageSummary);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Etiquetas (Fase 8)
+  // ---------------------------------------------------------------------------
+
+  /** Las etiquetas creadas por el usuario en la casilla (no las de sistema), por nombre. */
+  async listLabels(mailboxId: string): Promise<MailLabel[]> {
+    const apis = await this.google.forMailbox(mailboxId);
+    return this.userLabels(apis);
+  }
+
+  /**
+   * Agrega y saca etiquetas. Gmail las aplica a la conversación entera
+   * (`threads.modify`), así que las respuestas nuevas del hilo las heredan.
+   * Solo etiquetas de usuario de esta casilla: con las de sistema (INBOX,
+   * TRASH…) se podría archivar o borrar, y eso no es "etiquetar".
+   */
+  async updateLabels(
+    mailboxId: string,
+    messageId: string,
+    add: string[],
+    remove: string[],
+  ): Promise<{ labelIds: string[] }> {
+    const toAdd = [...new Set(add)];
+    const toRemove = [...new Set(remove)];
+    if (toAdd.some((id) => toRemove.includes(id))) {
+      throw new BadRequestException('Una etiqueta no puede agregarse y sacarse a la vez');
+    }
+    const apis = await this.google.forMailbox(mailboxId);
+    const known = new Set((await this.userLabels(apis)).map((l) => l.id));
+    const unknown = [...toAdd, ...toRemove].filter((id) => !known.has(id));
+    if (unknown.length > 0) {
+      throw new BadRequestException(
+        `Etiquetas que no existen en esta casilla: ${unknown.join(', ')}`,
+      );
+    }
+
+    const message = await this.call(apis.mailboxId, async () => {
+      const { data } = await apis.gmail.users.messages.get({
+        userId: 'me',
+        id: messageId,
+        format: 'minimal',
+      });
+      return data;
+    });
+    const current = userLabelIds(message);
+    if (toAdd.length === 0 && toRemove.length === 0) return { labelIds: current };
+
+    const requestBody = { addLabelIds: toAdd, removeLabelIds: toRemove };
+    await this.call(apis.mailboxId, () =>
+      message.threadId
+        ? apis.gmail.users.threads.modify({ userId: 'me', id: message.threadId, requestBody })
+        : apis.gmail.users.messages.modify({ userId: 'me', id: messageId, requestBody }),
+    );
+    return {
+      labelIds: [...new Set([...current, ...toAdd])].filter((id) => !toRemove.includes(id)),
+    };
+  }
+
+  private async userLabels(apis: MailboxGoogleApis): Promise<MailLabel[]> {
+    const labels = await this.call(apis.mailboxId, async () => {
+      const { data } = await apis.gmail.users.labels.list({ userId: 'me' });
+      return data.labels ?? [];
+    });
+    return labels
+      .filter((l) => l.type === 'user' && l.id && l.name)
+      .map((l) => ({
+        id: l.id ?? '',
+        name: l.name ?? '',
+        color: l.color?.backgroundColor ?? null,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }));
   }
 
   /** Detalle de un recibido. Lo marca como leído, igual que Gmail al abrirlo. */
@@ -530,7 +610,7 @@ export class MessagesService {
 
   private listByLabel(
     apis: MailboxGoogleApis,
-    label: 'INBOX' | 'SENT',
+    label: string,
     headers: string[],
   ): Promise<GmailMessage[]> {
     return this.call(apis.mailboxId, async () => {
@@ -643,6 +723,14 @@ export function isTrashed(message: GmailMessage | undefined): boolean {
   return (message?.labelIds ?? []).includes('TRASH');
 }
 
+/**
+ * Las etiquetas de usuario de un mensaje: en Gmail sus ids empiezan con
+ * `Label_`; las de sistema son nombres fijos (INBOX, UNREAD, CATEGORY_…).
+ */
+export function userLabelIds(message: GmailMessage): string[] {
+  return (message.labelIds ?? []).filter((id) => USER_LABEL_ID.test(id));
+}
+
 function dedupeRefs(refs: ForwardedAttachmentRef[]): ForwardedAttachmentRef[] {
   const seen = new Set<string>();
   return refs.filter((r) => {
@@ -669,6 +757,7 @@ export function toMessageSummary(message: GmailMessage): MessageSummary {
     snippet: decodeEntities(message.snippet ?? ''),
     receivedAt: messageDateIso(message),
     unread: hasLabel(message, 'UNREAD'),
+    labelIds: userLabelIds(message),
   };
 }
 

@@ -72,6 +72,8 @@ describe('MessagesService', () => {
         send: jest.Mock;
         attachments: { get: jest.Mock };
       };
+      labels: { list: jest.Mock };
+      threads: { modify: jest.Mock };
       drafts: {
         create: jest.Mock;
         update: jest.Mock;
@@ -98,6 +100,23 @@ describe('MessagesService', () => {
             get: jest.fn().mockResolvedValue({ data: { data: b64('contenido grande') } }),
           },
         },
+        labels: {
+          list: jest.fn().mockResolvedValue({
+            data: {
+              labels: [
+                { id: 'INBOX', name: 'INBOX', type: 'system' },
+                {
+                  id: 'Label_2',
+                  name: 'urgente',
+                  type: 'user',
+                  color: { backgroundColor: '#fb4c2f' },
+                },
+                { id: 'Label_1', name: 'Convenios', type: 'user' },
+              ],
+            },
+          }),
+        },
+        threads: { modify: jest.fn().mockResolvedValue({ data: {} }) },
         drafts: {
           create: jest.fn().mockResolvedValue({ data: { id: 'r-draft1' } }),
           update: jest.fn().mockResolvedValue({ data: { id: 'r-draft1' } }),
@@ -151,6 +170,7 @@ describe('MessagesService', () => {
         snippet: "It's ok",
         receivedAt: '2023-11-14T22:13:20.000Z',
         unread: true,
+        labelIds: [],
       });
     });
 
@@ -653,6 +673,69 @@ describe('MessagesService', () => {
         inReplyTo: '<orig@x.com>',
         references: '<orig@x.com>',
       });
+    });
+  });
+  describe('Etiquetas', () => {
+    it('lista solo las de usuario, por nombre, con el color de Gmail o null', async () => {
+      expect(await service.listLabels(MBX)).toEqual([
+        { id: 'Label_1', name: 'Convenios', color: null },
+        { id: 'Label_2', name: 'urgente', color: '#fb4c2f' },
+      ]);
+    });
+
+    it('los resúmenes traen solo las etiquetas de usuario', async () => {
+      gmail.users.messages.get.mockResolvedValue({
+        data: { ...inboxMessage, labelIds: ['INBOX', 'UNREAD', 'Label_1', 'CATEGORY_UPDATES'] },
+      });
+      const [summary] = await service.listInbox(MBX);
+      expect(summary.labelIds).toEqual(['Label_1']);
+    });
+
+    it('con labelId lista esa etiqueta en vez de Recibidos', async () => {
+      await service.listInbox(MBX, 'Label_1');
+      expect(gmail.users.messages.list).toHaveBeenCalledWith(
+        expect.objectContaining({ labelIds: ['Label_1'] }),
+      );
+    });
+
+    it('agrega y saca en la conversación (threads.modify) y devuelve cómo quedó', async () => {
+      gmail.users.messages.get.mockResolvedValue({
+        data: { id: 'msg00001', threadId: 'thr00001', labelIds: ['INBOX', 'Label_2'] },
+      });
+      const result = await service.updateLabels(MBX, 'msg00001', ['Label_1'], ['Label_2']);
+      expect(gmail.users.threads.modify).toHaveBeenCalledWith({
+        userId: 'me',
+        id: 'thr00001',
+        requestBody: { addLabelIds: ['Label_1'], removeLabelIds: ['Label_2'] },
+      });
+      expect(result).toEqual({ labelIds: ['Label_1'] });
+    });
+
+    it('400 con una etiqueta que no es de la casilla, o la misma en add y remove', async () => {
+      await expect(service.updateLabels(MBX, 'msg00001', ['Label_9'], [])).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      await expect(
+        service.updateLabels(MBX, 'msg00001', ['Label_1'], ['Label_1']),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(gmail.users.threads.modify).not.toHaveBeenCalled();
+    });
+
+    it('sin cambios no llama a Gmail para modificar', async () => {
+      gmail.users.messages.get.mockResolvedValue({
+        data: { id: 'msg00001', threadId: 'thr00001', labelIds: ['Label_2'] },
+      });
+      expect(await service.updateLabels(MBX, 'msg00001', [], [])).toEqual({
+        labelIds: ['Label_2'],
+      });
+      expect(gmail.users.threads.modify).not.toHaveBeenCalled();
+    });
+
+    it('mensaje inexistente → 404', async () => {
+      gmail.users.messages.get.mockRejectedValue({ status: 404 });
+      await expect(service.updateLabels(MBX, 'msg00001', ['Label_1'], [])).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
   });
 });

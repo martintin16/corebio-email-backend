@@ -23,6 +23,16 @@ export interface MessageSummary {
   snippet: string;
   receivedAt: string; // ISO
   unread: boolean;
+  /** Etiquetas de usuario de Gmail aplicadas (ver MailLabel). */
+  labelIds: string[];
+}
+
+/** Una etiqueta de Gmail creada por el usuario — `MailLabel` del frontend. */
+export interface MailLabel {
+  id: string;
+  name: string;
+  /** Color de fondo de Gmail ("#RRGGBB"), o null si no tiene. */
+  color: string | null;
 }
 
 export interface MessageDetail extends MessageSummary {

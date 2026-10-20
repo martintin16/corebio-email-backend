@@ -2,9 +2,12 @@ import {
   Body,
   Controller,
   Get,
+  BadRequestException,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
+  Query,
   StreamableFile,
   UploadedFiles,
   UseInterceptors,
@@ -16,14 +19,20 @@ import { toDownload, type UploadedAttachment } from './attachments';
 import { AttachmentsInterceptor } from './attachments.interceptor';
 import { ReplyMessageDto } from './dto/reply-message.dto';
 import { SendMessageDto } from './dto/send-message.dto';
+import { UpdateLabelsDto } from './dto/update-labels.dto';
 import { MessagesService } from './messages.service';
 import type {
+  MailLabel,
   MessageDetail,
   MessageSummary,
   SentMessageDetail,
   SentMessageSummary,
 } from './messages.types';
-import { ParseAttachmentIdPipe, ParseGmailIdPipe } from './pipes/parse-gmail-id.pipe';
+import {
+  ParseAttachmentIdPipe,
+  ParseGmailIdPipe,
+  USER_LABEL_ID,
+} from './pipes/parse-gmail-id.pipe';
 
 @Controller('mailboxes/:mailboxId')
 export class MessagesController {
@@ -31,10 +40,36 @@ export class MessagesController {
 
   // --- Recibidos ---------------------------------------------------------------
 
+  /** `?labelId=Label_…` → los de esa etiqueta (también archivados), en vez de Recibidos. */
   @RequireMailboxAccess('read')
   @Get('messages')
-  listInbox(@Param('mailboxId', ParseUUIDPipe) mailboxId: string): Promise<MessageSummary[]> {
-    return this.messages.listInbox(mailboxId);
+  listInbox(
+    @Param('mailboxId', ParseUUIDPipe) mailboxId: string,
+    @Query('labelId') labelId?: string,
+  ): Promise<MessageSummary[]> {
+    if (labelId !== undefined && !USER_LABEL_ID.test(labelId)) {
+      throw new BadRequestException('labelId inválido');
+    }
+    return this.messages.listInbox(mailboxId, labelId);
+  }
+
+  // --- Etiquetas -----------------------------------------------------------------
+
+  @RequireMailboxAccess('read')
+  @Get('labels')
+  listLabels(@Param('mailboxId', ParseUUIDPipe) mailboxId: string): Promise<MailLabel[]> {
+    return this.messages.listLabels(mailboxId);
+  }
+
+  /** Etiquetar es organizar lo que ya se lee: pide canRead. Se aplica a la conversación. */
+  @RequireMailboxAccess('read')
+  @Patch('messages/:messageId/labels')
+  updateLabels(
+    @Param('mailboxId', ParseUUIDPipe) mailboxId: string,
+    @Param('messageId', ParseGmailIdPipe) messageId: string,
+    @Body() dto: UpdateLabelsDto,
+  ): Promise<{ labelIds: string[] }> {
+    return this.messages.updateLabels(mailboxId, messageId, dto.add ?? [], dto.remove ?? []);
   }
 
   @RequireMailboxAccess('read')

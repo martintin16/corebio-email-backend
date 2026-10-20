@@ -180,7 +180,9 @@ Códigos de respuesta:
 | `POST /mailboxes/:id/reconnect` | admin | 3 | Primera conexión o reconexión con Google → `{ authUrl }` (llevar el navegador ahí) |
 | `GET /mailboxes/oauth/callback` | público | 3 | Vuelta de Google. Redirige a `<FRONTEND_URL>/admin/mailboxes?connected=<id>` o `?connectionError=<code>` |
 | `GET /me/mailboxes` | logueado | 1 | `Mailbox[]` a las que el usuario tiene algún permiso |
-| `GET /mailboxes/:id/messages` | `canRead` | 4 | Últimos 25 de Recibidos → `MessageSummary[]` |
+| `GET /mailboxes/:id/messages` | `canRead` | 4·8 | Últimos 25 de Recibidos → `MessageSummary[]` (con `labelIds`). `?labelId=Label_…` → los de esa etiqueta |
+| `GET /mailboxes/:id/labels` | `canRead` | 8 | Etiquetas de usuario de la casilla → `MailLabel[]` (`{ id, name, color }`) |
+| `PATCH /mailboxes/:id/messages/:messageId/labels` | `canRead` | 8 | `{ add?, remove? }` (ids de etiqueta) → aplica a la conversación → `{ labelIds }` |
 | `GET /mailboxes/:id/messages/:messageId` | `canRead` | 4 | `MessageDetail` (cuerpo en texto plano, `attachments`); lo marca como leído |
 | `GET /mailboxes/:id/messages/:messageId/attachments/:attachmentId` | `canRead` | 4.5 | Descarga un adjunto (recibidos y enviados) |
 | `POST /mailboxes/:id/messages` | `canSend` | 4·4.5·8 | Redactar: `{ to, cc?, bcc?, subject, body, forwardedAttachments? }` (destinatarios: emails separados por coma) + adjuntos (`attachments`, multipart). Reenviar adjuntos pide además `canRead`. Cupo diario → 429 `RECIPIENT_LIMIT_EXCEEDED` |
@@ -829,6 +831,26 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
 - Dos envíos simultáneos podrían pasarse por poco del cupo de la app (no hay reserva); Gmail
   igual pone el límite real.
 - Responder cuenta 1 destinatario.
+
+#### 8.2 Etiquetas de Gmail
+
+**Qué se construyó** (dentro de `messages/`, sin entidad propia)
+- `GET /mailboxes/:id/labels`: las etiquetas **creadas por el usuario** (no las de sistema), por
+  nombre, con `color` = el color de fondo de Gmail o `null` (el front le pone uno de su paleta).
+- `PATCH …/messages/:messageId/labels` con `{ add, remove }`: se aplica a la **conversación**
+  (`threads.modify`), igual que Gmail; las respuestas nuevas del hilo la heredan. Devuelve
+  `{ labelIds }` como quedó.
+- `MessageSummary` / `MessageDetail` suman `labelIds` (solo las de usuario).
+- `GET /mailboxes/:id/messages?labelId=…`: los mensajes de esa etiqueta, estén o no en Recibidos.
+
+**Decisiones**
+- **Solo etiquetas de usuario** (ids `Label_…`): con las de sistema (`INBOX`, `TRASH`, `SPAM`…)
+  "etiquetar" sería archivar o borrar. Una etiqueta que no es de la casilla → 400; la misma en
+  `add` y `remove` → 400.
+- **Pide `canRead`**: etiquetar es organizar lo que ya se lee, no enviar.
+- Crear, renombrar o borrar etiquetas queda fuera (se hace desde Gmail).
+- El filtro del front hoy es local sobre los 25 cargados; `?labelId=` permite traer los de una
+  etiqueta desde Gmail (sugerido para la conexión con el front).
 
 ### ⏳ Pendiente
 

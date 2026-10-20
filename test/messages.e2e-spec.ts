@@ -41,6 +41,8 @@ describe('Messages (e2e)', () => {
     getSentMessage: jest.fn(),
     findSentForUser: jest.fn(),
     getAttachment: jest.fn(),
+    listLabels: jest.fn(),
+    updateLabels: jest.fn(),
   };
   const access = {
     hasPermission: jest.fn((userId: string, mailboxId: string, p: 'read' | 'send') =>
@@ -308,6 +310,75 @@ describe('Messages (e2e)', () => {
         .send({ to: 'a@b.com', subject: 's', body: '<p>x</p>', forwardedAttachments })
         .expect(400);
       expect(messages.send).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Etiquetas', () => {
+    it('GET labels con canRead', async () => {
+      messages.listLabels.mockResolvedValue([{ id: 'Label_1', name: 'Salud', color: null }]);
+      await http()
+        .get(`/mailboxes/${MBX}/labels`)
+        .set('Authorization', await t.authHeader(ADMIN_ID))
+        .expect(200, [{ id: 'Label_1', name: 'Salud', color: null }]);
+    });
+
+    it('PATCH labels con canRead (sin canSend también) pasa add y remove', async () => {
+      messages.updateLabels.mockResolvedValue({ labelIds: ['Label_1'] });
+      await http()
+        .patch(`/mailboxes/${MBX}/messages/${MSG}/labels`)
+        .set('Authorization', await t.authHeader(ADMIN_ID))
+        .send({ add: ['Label_1'], remove: ['Label_2'] })
+        .expect(200, { labelIds: ['Label_1'] });
+      expect(messages.updateLabels).toHaveBeenCalledWith(MBX, MSG, ['Label_1'], ['Label_2']);
+    });
+
+    it('PATCH sin add/remove los toma como listas vacías', async () => {
+      messages.updateLabels.mockResolvedValue({ labelIds: [] });
+      await http()
+        .patch(`/mailboxes/${MBX}/messages/${MSG}/labels`)
+        .set('Authorization', await asUser())
+        .send({})
+        .expect(200);
+      expect(messages.updateLabels).toHaveBeenCalledWith(MBX, MSG, [], []);
+    });
+
+    it.each([
+      ['etiqueta de sistema', { add: ['INBOX'] }],
+      ['TRASH en remove', { remove: ['TRASH'] }],
+      ['no es lista', { add: 'Label_1' }],
+      ['campo de más', { add: [], color: 'red' }],
+    ])('PATCH 400 con %s', async (_case, body) => {
+      await http()
+        .patch(`/mailboxes/${MBX}/messages/${MSG}/labels`)
+        .set('Authorization', await asUser())
+        .send(body)
+        .expect(400);
+      expect(messages.updateLabels).not.toHaveBeenCalled();
+    });
+
+    it('sin acceso a la casilla → 403', async () => {
+      await http()
+        .get(`/mailboxes/${OTHER}/labels`)
+        .set('Authorization', await asUser())
+        .expect(403);
+      await http()
+        .patch(`/mailboxes/${OTHER}/messages/${MSG}/labels`)
+        .set('Authorization', await asUser())
+        .send({ add: ['Label_1'] })
+        .expect(403);
+    });
+
+    it('GET messages?labelId= filtra por etiqueta; un labelId de sistema → 400', async () => {
+      messages.listInbox.mockResolvedValue([]);
+      await http()
+        .get(`/mailboxes/${MBX}/messages?labelId=Label_7`)
+        .set('Authorization', await asUser())
+        .expect(200);
+      expect(messages.listInbox).toHaveBeenCalledWith(MBX, 'Label_7');
+      await http()
+        .get(`/mailboxes/${MBX}/messages?labelId=TRASH`)
+        .set('Authorization', await asUser())
+        .expect(400);
     });
   });
 
