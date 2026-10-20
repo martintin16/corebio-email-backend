@@ -82,6 +82,7 @@ solo transpila, sin chequear tipos). Con el chequeo completo en cada proceso, un
 | `GOOGLE_TOKEN_ENCRYPTION_KEY` | Sí | 32 bytes en base64. Encripta los refresh_token. **Si cambia, hay que reconectar todas las casillas.** |
 | `OAUTH_STATE_SECRET` | Sí | Mínimo 32 caracteres. Firma el `state` del flujo OAuth. |
 | `CORS_ORIGINS` | Sí | Orígenes permitidos separados por coma. |
+| `SCHEDULED_SENDER_ENABLED` | No (`true`) | Job de envíos programados (cada minuto). Apagarlo en una instancia que no deba enviar (ej. una copia local contra la base de producción). |
 | `PORT` | No (`4000`) | Railway lo inyecta solo. |
 | `NODE_ENV` | No | `development` / `production` / `test`. |
 
@@ -123,7 +124,7 @@ src/
   users/                  user_profiles, gestión de usuarios e invitaciones (Fases 0 y 2)
   mailboxes/              casillas, permisos por casilla, @RequireMailboxAccess (Fase 1)
   messages/               Recibidos, Enviados, Redactar, Responder y adjuntos contra Gmail (Fases 4 y 4.5)
-  scheduled-messages/     Fase 5 (módulo vacío)
+  scheduled-messages/     envíos programados: tabla, borradores de Gmail y job por minuto (Fase 5)
   templates/              Fase 6 (módulo vacío)
   drive-access/           Fase 7 (módulo vacío)
 test/
@@ -186,6 +187,12 @@ Códigos de respuesta:
 | `GET /mailboxes/:id/sent` | `canRead` | 4 | Últimos 25 de Enviados → `SentMessageSummary[]` |
 | `GET /mailboxes/:id/sent/:sentId` | `canRead` | 4 | `SentMessageDetail` (cuerpo en HTML sanitizado, `attachments`) |
 | `GET /sent/:sentId` | `canRead` en la casilla | 4 | Para "Reenviar": busca el enviado en las casillas que la persona puede leer |
+| `GET /mailboxes/:id/scheduled-messages` | `canRead` | 5 | Programados de la casilla (pendientes, enviándose y con error) → `ScheduledMessage[]` |
+| `GET /scheduled-messages/:id` | `canRead` en su casilla | 5 | `ScheduledMessage` (404 si no tiene ningún permiso en la casilla) |
+| `GET /scheduled-messages/:id/attachments/:attachmentId` | `canRead` en su casilla | 5 | Descarga un adjunto del programado |
+| `POST /scheduled-messages` | `canSend` en `mailboxId` | 5 | `{ mailboxId, to, subject, body, scheduledAt, replyToMessageId?, forwardedAttachments? }` + adjuntos (multipart) → 201 |
+| `PATCH /scheduled-messages/:id` | `canSend` (y en la casilla nueva) | 5 | Cualquier campo + `keepAttachmentIds` + adjuntos nuevos. Solo `pending`/`failed` (si no, 409) |
+| `DELETE /scheduled-messages/:id` | `canSend` en su casilla | 5 | Cancela (borra fila y borrador) → 204. Solo `pending`/`failed` (si no, 409) |
 | `GET /users` | admin | 2 | `AdminUser[]` |
 | `POST /users` | admin | 2 | `{ name, email, role, access }` → invita y devuelve `AdminUser` (201; 409 si el email existe) |
 | `PATCH /users/:id/permissions` | admin | 2 | `{ role, access }` (reemplaza todos los permisos) → `AdminUser` |
@@ -527,7 +534,7 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
 - **Errores:** mensaje inexistente → 404; casilla sin conexión válida → 409
   `mailbox_needs_reconnect`; otro error de Google → 502; id con formato inválido → 400;
   adjuntos de más → 400; adjuntos que superan 20 MB → 413.
-- **Adjuntos de mensajes recibidos: no se exponen** (el contrato no los incluye).
+- **Adjuntos de mensajes recibidos: no se exponen** (el contrato no los incluye). Se suman en la Fase 4.5.
 
 **Cambios de contrato con el frontend (para la mini-fase front↔back)**
 - Redactar/Responder: multipart con los archivos en `attachments` (o JSON sin adjuntos).
@@ -582,8 +589,75 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
 - A verificar contra Gmail: ver y bajar adjuntos (con tildes en el nombre), reenviar un
   enviado con sus adjuntos, el mensaje en español con 11 adjuntos.
 
+### ✅ Fase 5 — Envíos programados
+
+**Qué se construyó**
+- Tabla `scheduled_messages` (migración `1791100000000-CreateScheduledMessages`, con el
+  cerrojo de RLS) y los endpoints de la tabla de arriba.
+- **El mensaje se guarda como borrador de Gmail en la casilla** (con sus adjuntos): se crea
+  al programar, se actualiza al editar y se borra al cancelar. La tabla guarda lo necesario
+  para listarlo (destinatario, asunto, HTML sanitizado, lista de adjuntos, fecha, estado).
+- Job (`ScheduledSenderService`) en el mismo proceso de la API, **cada minuto**:
+  1. marca `failed` los que quedaron `sending` hace más de 10 minutos (el proceso se cortó
+     enviando): no se reenvían solos, porque Gmail pudo haberlos mandado;
+  2. toma hasta 20 vencidos con `FOR UPDATE SKIP LOCKED` y los pasa a `sending` en la misma
+     sentencia;
+  3. envía cada borrador con `drafts.send` y guarda el id del mensaje enviado.
+- Respuestas programadas (`replyToMessageId`): destinatario, asunto e hilo salen del
+  original, igual que Responder.
+- Reenviar adjuntos también al programar (`forwardedAttachments`, pide `canRead`).
+- Variable `SCHEDULED_SENDER_ENABLED` para apagar el job en una instancia.
+
+**Decisiones**
+- **No hace falta tener la sesión abierta**: el envío lo hace el backend (que en Railway está
+  siempre prendido) con el permiso de Google de la casilla. En local, el backend tiene que
+  estar corriendo a la hora programada.
+- **Por qué un borrador de Gmail** y no archivos en la base o en un storage: los adjuntos
+  pueden pesar 20 MB y Gmail ya los guarda, sin costo ni infraestructura nueva. Además
+  enviar un borrador es idempotente: si Gmail ya lo mandó, el borrador no existe más y un
+  reintento falla en vez de duplicar el mail. Contra: el borrador se ve en la carpeta
+  Borradores de la casilla; si alguien lo envía o lo borra desde Gmail, el programado queda
+  `failed` ("el borrador ya no existe… revisá Enviados").
+- **Estados**: `pending` → `sending` → `sent`, o `failed` con `lastError`. Los `sent` no
+  aparecen en la lista (ya están en Enviados). Editar uno `failed` lo vuelve a `pending`; si
+  no se le cambia la fecha y ya pasó, sale en la próxima vuelta (sirve de "reintentar").
+- **Reintentos**: un error transitorio de Google (502) se reintenta a 1, 5 y 15 minutos; al
+  cuarto intento queda `failed`. Casilla desconectada (`needs_reconnect`) o borrador
+  inexistente → `failed` enseguida, sin reintentos.
+- **Fecha**: entre 1 minuto y 1 año desde ahora (ISO 8601 con zona; la guarda en UTC).
+- **Permisos**: ver pide `canRead`; crear, editar y cancelar, `canSend`. Sin ningún permiso
+  sobre la casilla → 404 (no se revela que existe). **Al enviar** se vuelve a chequear que la
+  última persona que lo programó o editó siga activa y con `canSend`: si le sacaron el
+  permiso o la desactivaron, no sale (`failed`).
+- **Editar y cancelar no chocan con el job**: editar reserva la fila (`locked_until`, 2
+  minutos) y el job no toma filas reservadas; cancelar es un `DELETE` condicional. Si el job
+  ya la tomó → 409.
+- **Adjuntos al editar**: `keepAttachmentIds` omitido conserva todos; `[]` ninguno; los
+  archivos nuevos y los reenviados se suman. Si el borrador ya no existe y había adjuntos →
+  400 (hay que volver a adjuntarlos; no se pierden en silencio).
+- **Mover de casilla** crea el borrador en la nueva y borra el viejo (pide `canSend` en las
+  dos). Una respuesta no se puede mover (el hilo es de la casilla original).
+- **Un job sin librería** (`setInterval` en el ciclo de vida de Nest) en vez de
+  `@nestjs/schedule`: la versión actual de esa librería es solo ESM (el mismo problema de
+  Jest que `sanitize-html`) y para "cada minuto" no hace falta más. Sin dependencias nuevas.
+- **Con varias instancias** no se duplican envíos (`SKIP LOCKED` + estado `sending`).
+- Fuera de alcance: avisar por mail cuando un programado falla.
+
+**Cambios de contrato con el frontend (para la mini-fase front↔back)**
+- `ScheduledMessage` suma `status`, `lastError`, `attachments`, `replyToMessageId` y `sentAt`.
+- Programar desde Redactar/Responder: `POST /scheduled-messages` con los adjuntos (multipart)
+  y, desde Responder, `replyToMessageId`.
+- "Editar" muestra los adjuntos que ya tiene (y manda `keepAttachmentIds`); "Cancelar" es
+  `DELETE`. Mostrar el estado `failed` con su motivo.
+
+**Verificación**
+- A correr: `npm run migration:run`, `test`, `test:e2e`, `typecheck`, `lint`.
+- A verificar contra Gmail: programar a 2 minutos con adjunto (aparece en Borradores y
+  después en Enviados), editar antes de la hora (cambia el borrador), cancelar (desaparece
+  el borrador), programar una respuesta (queda en el hilo), y borrar el borrador desde
+  Gmail antes de la hora (queda `failed` con el motivo).
+
 ### ⏳ Pendiente
 
-- **Fase 5 — Scheduled messages** (tabla + job periódico).
 - **Fase 6 — Templates.**
 - **Fase 7 — Drive access** (Drive API).

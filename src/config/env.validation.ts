@@ -47,4 +47,8 @@ export const envValidationSchema = Joi.object({
     .messages({ 'any.invalid': '{{#label}} tiene que ser 32 bytes en base64' }),
   // Firma el `state` del flujo OAuth (que nadie pueda falsificar una conexión).
   OAUTH_STATE_SECRET: Joi.string().min(32).required(),
+
+  // Job de envíos programados (cada minuto). Apagarlo en una instancia que no
+  // deba enviar (ej. una copia local apuntando a la misma base).
+  SCHEDULED_SENDER_ENABLED: Joi.boolean().default(true),
 });
