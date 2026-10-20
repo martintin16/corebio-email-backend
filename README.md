@@ -487,11 +487,14 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
   hace la Gmail API como subida `message/rfc822`.
 - Adjuntos: `multipart/form-data`, campo `attachments`, hasta 10 archivos y 20 MB en total.
 - Jest más liviano (`maxWorkers: 50%`, `tsconfig.spec.json` con `isolatedModules`).
-- **`sanitize-html` fijado en `~2.17.1`.** Desde la 2.18 depende de `htmlparser2@12`, que es
-  solo ESM: la app funciona igual (Node 24 carga ESM desde CommonJS), pero Jest no puede
-  importarlo y las suites que lo usan fallan con `Cannot use import statement outside a
-  module`. La 2.17.x tiene la misma API y el mismo sanitizado. Revisar al pasar a una
-  versión de Jest con soporte de `require(esm)`.
+- **`sanitize-html` en su última versión + Jest transformando sus dependencias ESM.**
+  Desde la 2.17.2 depende de `htmlparser2@10/12`, que es solo ESM: la app funciona igual
+  (Node 24 carga ESM desde CommonJS), pero Jest no puede importarlo y las suites que lo usan
+  fallaban con `Cannot use import statement outside a module`. Se descartó fijar la 2.17.1
+  (la última con `htmlparser2@8`): es la barrera contra XSS y quedaría sin los arreglos de
+  seguridad que salgan. En su lugar, `transformIgnorePatterns` deja que ts-jest
+  (`allowJs` en `tsconfig.spec.json`) transforme `htmlparser2`, `domhandler`, `domutils`,
+  `dom-serializer`, `domelementtype` y `entities`, también cuando están anidados.
 - Tests unitarios (parseo, sanitizador, MIME, adjuntos, concurrencia, servicio con Gmail
   simulado) y e2e (permisos read/send, validaciones, multipart, límites).
 
@@ -524,10 +527,11 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
 
 **Verificación**
 - ✅ Dependencias instaladas y lockfile commiteado. `build`, `typecheck` y `lint` pasan.
-- ❌→ corregido: `test`/`test:e2e` fallaban por `sanitize-html@2.18` (ESM, ver arriba) y
-  ts-jest avisaba que la opción `isolatedModules` está deprecada (ahora va en
-  `tsconfig.spec.json`). Con `maxWorkers: 50%` Jest abre 6 procesos y la CPU no pasa del 74%.
-- A verificar de nuevo: `npm install` (baja a sanitize-html 2.17.x), `test`, `test:e2e`.
+- ❌→ corregido: `test`/`test:e2e` fallaban por las dependencias ESM de `sanitize-html` (ver
+  arriba) y ts-jest avisaba que la opción `isolatedModules` está deprecada (ahora va en
+  `tsconfig.spec.json`, sin warning). Con `maxWorkers: 50%` Jest abre 6 procesos y la CPU no
+  pasa del 74%.
+- A verificar de nuevo: `npm install`, `test`, `test:e2e`.
 - A verificar contra Gmail: listar y abrir recibidos (se marcan como leídos), listar y abrir
   enviados, redactar con y sin adjuntos, responder (queda en el mismo hilo), permisos.
 

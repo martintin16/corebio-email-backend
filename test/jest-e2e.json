@@ -15,5 +15,8 @@
       }
     ]
   },
-  "maxWorkers": "50%"
+  "maxWorkers": "50%",
+  "transformIgnorePatterns": [
+    "/node_modules/(?!(?:htmlparser2|domhandler|domutils|dom-serializer|domelementtype|entities)/)[^/]+/(?!.*node_modules)"
+  ]
 }
