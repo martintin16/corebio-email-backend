@@ -156,3 +156,44 @@ export function replySubject(subject: string): string {
 export function hasLabel(message: GmailMessage, label: string): boolean {
   return (message.labelIds ?? []).includes(label);
 }
+
+/** Un adjunto dentro de un mensaje de Gmail (lo necesario para listarlo y bajarlo). */
+export interface AttachmentPart {
+  /** `partId` de Gmail ("1", "0.2"): estable entre lecturas, a diferencia de `attachmentId`. */
+  partId: string;
+  filename: string;
+  mimeType: string;
+  /** Tamaño ya decodificado, en bytes. */
+  size: number;
+  /** Si está, el contenido se pide aparte con `messages.attachments.get`. */
+  attachmentId: string | null;
+  /** Si no hay `attachmentId`, Gmail manda el contenido acá (base64url). */
+  data: string | null;
+}
+
+/**
+ * Las partes con nombre de archivo (adjuntos e imágenes embebidas). Un adjunto
+ * que es a su vez un mail (`message/rfc822`) cuenta como uno solo: no se
+ * recorren sus partes internas.
+ */
+export function listAttachmentParts(payload: GmailPart | undefined): AttachmentPart[] {
+  const result: AttachmentPart[] = [];
+  const walk = (part: GmailPart | undefined): void => {
+    if (!part) return;
+    const filename = decodeMimeWords(part.filename ?? '').trim();
+    if (filename && part.partId) {
+      result.push({
+        partId: part.partId,
+        filename,
+        mimeType: (part.mimeType || 'application/octet-stream').toLowerCase(),
+        size: part.body?.size ?? 0,
+        attachmentId: part.body?.attachmentId ?? null,
+        data: part.body?.data ?? null,
+      });
+      return;
+    }
+    part.parts?.forEach(walk);
+  };
+  walk(payload);
+  return result;
+}

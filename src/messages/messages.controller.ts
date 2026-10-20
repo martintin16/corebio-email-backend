@@ -5,18 +5,15 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  StreamableFile,
   UploadedFiles,
   UseInterceptors,
 } from '@nestjs/common';
-import { FilesInterceptor } from '@nestjs/platform-express';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { RequireMailboxAccess } from '../mailboxes/decorators/require-mailbox-access.decorator';
-import {
-  MAX_ATTACHMENTS,
-  MAX_ATTACHMENTS_TOTAL_BYTES,
-  type UploadedAttachment,
-} from './attachments';
+import { toDownload, type UploadedAttachment } from './attachments';
+import { AttachmentsInterceptor } from './attachments.interceptor';
 import { ReplyMessageDto } from './dto/reply-message.dto';
 import { SendMessageDto } from './dto/send-message.dto';
 import { MessagesService } from './messages.service';
@@ -26,16 +23,7 @@ import type {
   SentMessageDetail,
   SentMessageSummary,
 } from './messages.types';
-import { ParseGmailIdPipe } from './pipes/parse-gmail-id.pipe';
-
-/**
- * Adjuntos: multipart/form-data con los archivos en el campo `attachments`.
- * Archivos de más o más grandes que el total → 400/413. También acepta JSON
- * sin adjuntos.
- */
-const AttachmentsInterceptor = FilesInterceptor('attachments', MAX_ATTACHMENTS, {
-  limits: { fileSize: MAX_ATTACHMENTS_TOTAL_BYTES, files: MAX_ATTACHMENTS },
-});
+import { ParseAttachmentIdPipe, ParseGmailIdPipe } from './pipes/parse-gmail-id.pipe';
 
 @Controller('mailboxes/:mailboxId')
 export class MessagesController {
@@ -58,17 +46,29 @@ export class MessagesController {
     return this.messages.getInboxMessage(mailboxId, messageId);
   }
 
+  /** Descarga de un adjunto. Sirve para recibidos y enviados (mismos ids de Gmail). */
+  @RequireMailboxAccess('read')
+  @Get('messages/:messageId/attachments/:attachmentId')
+  async downloadAttachment(
+    @Param('mailboxId', ParseUUIDPipe) mailboxId: string,
+    @Param('messageId', ParseGmailIdPipe) messageId: string,
+    @Param('attachmentId', ParseAttachmentIdPipe) attachmentId: string,
+  ): Promise<StreamableFile> {
+    return toDownload(await this.messages.getAttachment(mailboxId, messageId, attachmentId));
+  }
+
   // --- Redactar y Responder ----------------------------------------------------
 
   @RequireMailboxAccess('send')
   @Post('messages')
   @UseInterceptors(AttachmentsInterceptor)
   send(
+    @CurrentUser() user: AuthenticatedUser,
     @Param('mailboxId', ParseUUIDPipe) mailboxId: string,
     @Body() dto: SendMessageDto,
     @UploadedFiles() files?: UploadedAttachment[],
   ): Promise<SentMessageSummary> {
-    return this.messages.send(mailboxId, dto, files);
+    return this.messages.send(mailboxId, dto, files, user.id);
   }
 
   @RequireMailboxAccess('send')

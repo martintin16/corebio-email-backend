@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -10,7 +11,11 @@ import { Readable } from 'stream';
 import { mapWithConcurrency } from '../common/concurrency';
 import { GoogleMailboxClient, type MailboxGoogleApis } from '../google/google-mailbox-client';
 import { MailboxAccessService } from '../mailboxes/mailbox-access.service';
-import { toOutgoingAttachments, type UploadedAttachment } from './attachments';
+import {
+  assertAttachmentLimits,
+  toOutgoingAttachments,
+  type UploadedAttachment,
+} from './attachments';
 import {
   htmlToPlainText,
   plainTextToHtml,
@@ -20,16 +25,21 @@ import {
 import type { ReplyMessageDto } from './dto/reply-message.dto';
 import type { SendMessageDto } from './dto/send-message.dto';
 import {
+  type AttachmentPart,
   decodeEntities,
   extractBodies,
   getHeader,
   hasLabel,
+  listAttachmentParts,
   messageDateIso,
   parseAddress,
   replySubject,
 } from './gmail/gmail-message';
-import { buildRawMessage } from './gmail/mime';
+import { buildRawMessage, type OutgoingAttachment } from './gmail/mime';
 import type {
+  AttachmentInfo,
+  DownloadedAttachment,
+  ForwardedAttachmentRef,
   MessageDetail,
   MessageSummary,
   SentMessageDetail,
@@ -37,6 +47,41 @@ import type {
 } from './messages.types';
 
 type GmailMessage = gmail_v1.Schema$Message;
+
+/** Datos del mensaje original para responder en su hilo. */
+export interface ReplyContext {
+  /** Reply-To (o From) del original, tal cual: `Nombre <email>`. */
+  to: string;
+  subject: string;
+  threadId?: string;
+  inReplyTo?: string;
+  references?: string;
+}
+
+/** Lo que hace falta para armar un mensaje saliente (envío directo o borrador). */
+export interface ComposeInput {
+  to: string;
+  subject: string;
+  /** HTML ya sanitizado. */
+  html: string;
+  attachments: OutgoingAttachment[];
+  reply?: ReplyContext;
+}
+
+/** De dónde salen los adjuntos de un mensaje saliente. */
+export interface AttachmentSources {
+  /** Subidos en este pedido (multipart). */
+  files?: UploadedAttachment[];
+  /** De otros mensajes de la misma casilla ("Reenviar"). */
+  forwarded?: ForwardedAttachmentRef[];
+  /** Los que se conservan de un borrador existente (editar un programado). */
+  kept?: { apis: MailboxGoogleApis; message: GmailMessage; partIds: string[] };
+}
+
+const NOT_FOUND_MESSAGE = 'El mensaje no existe';
+const FORWARDED_NOT_FOUND = 'Un adjunto reenviado no existe en esta casilla';
+const KEPT_NOT_FOUND = 'Uno de los adjuntos a conservar ya no existe';
+export const DRAFT_NOT_FOUND = 'El borrador ya no existe en Gmail';
 
 /** Cuántos mensajes trae cada listado (el contrato del frontend no pagina). */
 export const LIST_LIMIT = 25;
@@ -148,25 +193,32 @@ export class MessagesService {
   // Redactar y Responder
   // ---------------------------------------------------------------------------
 
+  /**
+   * Redactar. `userId` hace falta solo para reenviar adjuntos: bajarlos de la
+   * casilla es leerla, así que además de canSend (lo chequea el guard) pide canRead.
+   */
   async send(
     mailboxId: string,
     dto: SendMessageDto,
     files?: UploadedAttachment[],
+    userId?: string,
   ): Promise<SentMessageSummary> {
     if (dto.mailboxId && dto.mailboxId !== mailboxId) {
       throw new BadRequestException('mailboxId no coincide con la casilla de la ruta');
     }
-    const attachments = toOutgoingAttachments(files);
+    const forwarded = dto.forwardedAttachments ?? [];
+    // Primero lo que se puede rechazar sin hablar con Google.
+    toOutgoingAttachments(files);
+    assertAttachmentLimits((files?.length ?? 0) + forwarded.length, 0);
+    if (forwarded.length > 0) await this.assertCanRead(userId, mailboxId);
+
     const apis = await this.google.forMailbox(mailboxId);
     const html = sanitizeEmailHtml(dto.body);
-    const text = htmlToPlainText(html);
-
-    const raw = await buildRawMessage({
-      from: { name: apis.displayName, address: apis.email },
+    const attachments = await this.collectAttachments(apis, { files, forwarded });
+    const raw = await this.composeRaw(apis, {
       to: dto.to,
       subject: dto.subject,
       html,
-      text,
       attachments,
     });
     const sent = await this.sendRaw(apis, raw);
@@ -175,7 +227,7 @@ export class MessagesService {
       id: sent.id ?? '',
       to: dto.to,
       subject: dto.subject,
-      snippet: toSnippet(text),
+      snippet: toSnippet(htmlToPlainText(html)),
       sentAt: new Date().toISOString(),
     };
   }
@@ -192,6 +244,123 @@ export class MessagesService {
   ): Promise<SentMessageSummary> {
     const attachments = toOutgoingAttachments(files);
     const apis = await this.google.forMailbox(mailboxId);
+    const reply = await this.resolveReply(apis, messageId);
+    const html = sanitizeEmailHtml(dto.body);
+    const raw = await this.composeRaw(apis, {
+      to: reply.to,
+      subject: reply.subject,
+      html,
+      attachments,
+      reply,
+    });
+    const sent = await this.sendRaw(apis, raw, reply.threadId);
+
+    return {
+      id: sent.id ?? '',
+      to: parseAddress(reply.to).email,
+      subject: reply.subject,
+      snippet: toSnippet(htmlToPlainText(html)),
+      sentAt: new Date().toISOString(),
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Adjuntos
+  // ---------------------------------------------------------------------------
+
+  /** GET …/messages/:messageId/attachments/:attachmentId (recibidos y enviados). */
+  async getAttachment(
+    mailboxId: string,
+    messageId: string,
+    attachmentId: string,
+  ): Promise<DownloadedAttachment> {
+    const apis = await this.google.forMailbox(mailboxId);
+    const message = await this.getFull(apis, messageId);
+    return this.downloadAttachment(apis, message, attachmentId);
+  }
+
+  /** Baja un adjunto de un mensaje ya leído (de la casilla de `apis`). 404 si no está. */
+  async downloadAttachment(
+    apis: MailboxGoogleApis,
+    message: GmailMessage,
+    attachmentId: string,
+  ): Promise<DownloadedAttachment> {
+    const part = listAttachmentParts(message.payload ?? undefined).find(
+      (p) => p.partId === attachmentId,
+    );
+    if (!part) throw new NotFoundException('El adjunto no existe');
+    return {
+      filename: part.filename,
+      mimeType: part.mimeType,
+      content: await this.partContent(apis, message.id ?? '', part),
+    };
+  }
+
+  /**
+   * Junta los adjuntos de un mensaje saliente: los que se conservan de un
+   * borrador, los reenviados y los subidos, en ese orden. Valida los límites
+   * con los tamaños que informa Gmail ANTES de bajar nada.
+   */
+  async collectAttachments(
+    apis: MailboxGoogleApis,
+    sources: AttachmentSources,
+  ): Promise<OutgoingAttachment[]> {
+    const uploaded = toOutgoingAttachments(sources.files);
+
+    const kept: { apis: MailboxGoogleApis; messageId: string; part: AttachmentPart }[] = [];
+    if (sources.kept) {
+      const { message } = sources.kept;
+      const parts = listAttachmentParts(message.payload ?? undefined);
+      for (const id of new Set(sources.kept.partIds)) {
+        const part = parts.find((p) => p.partId === id);
+        if (!part) throw new BadRequestException(KEPT_NOT_FOUND);
+        kept.push({ apis: sources.kept.apis, messageId: message.id ?? '', part });
+      }
+    }
+
+    const forwarded: { apis: MailboxGoogleApis; messageId: string; part: AttachmentPart }[] = [];
+    const refs = dedupeRefs(sources.forwarded ?? []);
+    const byMessage = new Map<string, string[]>();
+    for (const ref of refs) {
+      byMessage.set(ref.messageId, [...(byMessage.get(ref.messageId) ?? []), ref.attachmentId]);
+    }
+    for (const [messageId, partIds] of byMessage) {
+      let message: GmailMessage;
+      try {
+        message = await this.getFull(apis, messageId);
+      } catch (err) {
+        if (err instanceof NotFoundException) throw new BadRequestException(FORWARDED_NOT_FOUND);
+        throw err;
+      }
+      const parts = listAttachmentParts(message.payload ?? undefined);
+      for (const id of partIds) {
+        const part = parts.find((p) => p.partId === id);
+        if (!part) throw new BadRequestException(FORWARDED_NOT_FOUND);
+        forwarded.push({ apis, messageId, part });
+      }
+    }
+
+    const fromGmail = [...kept, ...forwarded];
+    assertAttachmentLimits(
+      uploaded.length + fromGmail.length,
+      uploaded.reduce((sum, a) => sum + a.content.length, 0) +
+        fromGmail.reduce((sum, a) => sum + a.part.size, 0),
+    );
+
+    const downloaded = await mapWithConcurrency(fromGmail, GMAIL_CONCURRENCY, async (a) => ({
+      filename: a.part.filename,
+      contentType: a.part.mimeType,
+      content: await this.partContent(a.apis, a.messageId, a.part),
+    }));
+    return [...downloaded, ...uploaded];
+  }
+
+  // ---------------------------------------------------------------------------
+  // Piezas para envíos programados (Fase 5)
+  // ---------------------------------------------------------------------------
+
+  /** Destinatario, asunto y encabezados de hilo para responder a `messageId`. */
+  async resolveReply(apis: MailboxGoogleApis, messageId: string): Promise<ReplyContext> {
     const original = await this.call(apis.mailboxId, async () => {
       const { data } = await apis.gmail.users.messages.get({
         userId: 'me',
@@ -204,31 +373,114 @@ export class MessagesService {
 
     const to = getHeader(original, 'Reply-To') || getHeader(original, 'From');
     if (!to) throw new BadRequestException('El mensaje original no tiene remitente');
-    const subject = replySubject(getHeader(original, 'Subject'));
     const originalId = getHeader(original, 'Message-ID');
     const references = [getHeader(original, 'References'), originalId].filter(Boolean).join(' ');
-
-    const html = sanitizeEmailHtml(dto.body);
-    const text = htmlToPlainText(html);
-    const raw = await buildRawMessage({
-      from: { name: apis.displayName, address: apis.email },
+    return {
       to,
-      subject,
-      html,
-      text,
+      subject: replySubject(getHeader(original, 'Subject')),
+      threadId: original.threadId ?? undefined,
       inReplyTo: originalId || undefined,
       references: references || undefined,
-      attachments,
-    });
-    const sent = await this.sendRaw(apis, raw, original.threadId ?? undefined);
-
-    return {
-      id: sent.id ?? '',
-      to: parseAddress(to).email,
-      subject,
-      snippet: toSnippet(text),
-      sentAt: new Date().toISOString(),
     };
+  }
+
+  /** Arma el RFC 822 con la casilla como remitente. */
+  composeRaw(apis: MailboxGoogleApis, input: ComposeInput): Promise<Buffer> {
+    return buildRawMessage({
+      from: { name: apis.displayName, address: apis.email },
+      to: input.to,
+      subject: input.subject,
+      html: input.html,
+      text: htmlToPlainText(input.html),
+      inReplyTo: input.reply?.inReplyTo,
+      references: input.reply?.references,
+      attachments: input.attachments,
+    });
+  }
+
+  /** Crea un borrador en la casilla. Devuelve el id del borrador. */
+  async createDraft(apis: MailboxGoogleApis, raw: Buffer, threadId?: string): Promise<string> {
+    const draft = await this.call(apis.mailboxId, async () => {
+      const { data } = await apis.gmail.users.drafts.create({
+        userId: 'me',
+        requestBody: { message: threadId ? { threadId } : {} },
+        media: { mimeType: 'message/rfc822', body: Readable.from([raw]) },
+      });
+      return data;
+    });
+    if (!draft.id) throw new Error('Gmail no devolvió el id del borrador');
+    return draft.id;
+  }
+
+  /** Reemplaza el contenido de un borrador. 404 si ya no existe. */
+  async updateDraft(
+    apis: MailboxGoogleApis,
+    draftId: string,
+    raw: Buffer,
+    threadId?: string,
+  ): Promise<void> {
+    await this.call(
+      apis.mailboxId,
+      () =>
+        apis.gmail.users.drafts.update({
+          userId: 'me',
+          id: draftId,
+          requestBody: { id: draftId, message: threadId ? { threadId } : {} },
+          media: { mimeType: 'message/rfc822', body: Readable.from([raw]) },
+        }),
+      DRAFT_NOT_FOUND,
+    );
+  }
+
+  /** El mensaje completo de un borrador (para ver y bajar sus adjuntos). 404 si no existe. */
+  async getDraftMessage(apis: MailboxGoogleApis, draftId: string): Promise<GmailMessage> {
+    const draft = await this.call(
+      apis.mailboxId,
+      async () => {
+        const { data } = await apis.gmail.users.drafts.get({
+          userId: 'me',
+          id: draftId,
+          format: 'full',
+        });
+        return data;
+      },
+      DRAFT_NOT_FOUND,
+    );
+    if (!draft.message) throw new NotFoundException(DRAFT_NOT_FOUND);
+    return draft.message;
+  }
+
+  /** Envía un borrador. 404 si ya no existe (alguien lo envió o borró desde Gmail). */
+  async sendDraft(
+    apis: MailboxGoogleApis,
+    draftId: string,
+  ): Promise<{ messageId: string; threadId: string | null }> {
+    const sent = await this.call(
+      apis.mailboxId,
+      async () => {
+        const { data } = await apis.gmail.users.drafts.send({
+          userId: 'me',
+          requestBody: { id: draftId },
+        });
+        return data;
+      },
+      DRAFT_NOT_FOUND,
+    );
+    return { messageId: sent.id ?? '', threadId: sent.threadId ?? null };
+  }
+
+  /** Borra un borrador. Si ya no existe, no hace nada. */
+  async deleteDraft(apis: MailboxGoogleApis, draftId: string): Promise<void> {
+    try {
+      await this.call(
+        apis.mailboxId,
+        () => apis.gmail.users.drafts.delete({ userId: 'me', id: draftId }),
+        DRAFT_NOT_FOUND,
+      );
+    } catch (err) {
+      if (err instanceof NotFoundException) return;
+      throw err;
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -279,15 +531,61 @@ export class MessagesService {
     });
   }
 
+  /** Contenido de un adjunto: viene en la parte o se pide aparte a Gmail. */
+  private async partContent(
+    apis: MailboxGoogleApis,
+    messageId: string,
+    part: AttachmentPart,
+  ): Promise<Buffer> {
+    if (part.data !== null) return Buffer.from(part.data, 'base64url');
+    if (part.attachmentId === null) return Buffer.alloc(0);
+    const attachmentId = part.attachmentId;
+    const body = await this.call(
+      apis.mailboxId,
+      async () => {
+        const { data } = await apis.gmail.users.messages.attachments.get({
+          userId: 'me',
+          messageId,
+          id: attachmentId,
+        });
+        return data;
+      },
+      'El adjunto no existe',
+    );
+    return Buffer.from(body.data ?? '', 'base64url');
+  }
+
+  private async assertCanRead(userId: string | undefined, mailboxId: string): Promise<void> {
+    if (!userId || !(await this.access.hasPermission(userId, mailboxId, 'read'))) {
+      throw new ForbiddenException(
+        'Para reenviar adjuntos necesitás también permiso de lectura en la casilla',
+      );
+    }
+  }
+
   /** Traduce los errores de Gmail: 404 → NotFound; el resto lo resuelve GoogleMailboxClient. */
-  private async call<T>(mailboxId: string, fn: () => Promise<T>): Promise<T> {
+  private async call<T>(
+    mailboxId: string,
+    fn: () => Promise<T>,
+    notFoundMessage = NOT_FOUND_MESSAGE,
+  ): Promise<T> {
     try {
       return await fn();
     } catch (err) {
-      if (isGmailNotFound(err)) throw new NotFoundException('El mensaje no existe');
+      if (isGmailNotFound(err)) throw new NotFoundException(notFoundMessage);
       return this.google.handleGoogleError(mailboxId, err);
     }
   }
+}
+
+function dedupeRefs(refs: ForwardedAttachmentRef[]): ForwardedAttachmentRef[] {
+  const seen = new Set<string>();
+  return refs.filter((r) => {
+    const key = `${r.messageId}/${r.attachmentId}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 // -----------------------------------------------------------------------------
@@ -316,6 +614,7 @@ export function toMessageDetail(message: GmailMessage): MessageDetail {
     ...toMessageSummary(message),
     body: text?.trim() || (html ? htmlToPlainText(sanitizeEmailHtml(html)) : ''),
     to: getHeader(message, 'To'),
+    attachments: toAttachmentInfos(message),
   };
 }
 
@@ -336,5 +635,15 @@ export function toSentDetail(message: GmailMessage, mailboxId: string): SentMess
     ...toSentSummary(message),
     mailboxId,
     body: sanitizeEmailHtml(html ?? plainTextToHtml(text ?? '')),
+    attachments: toAttachmentInfos(message),
   };
+}
+
+export function toAttachmentInfos(message: GmailMessage): AttachmentInfo[] {
+  return listAttachmentParts(message.payload ?? undefined).map((p) => ({
+    id: p.partId,
+    filename: p.filename,
+    mimeType: p.mimeType,
+    size: p.size,
+  }));
 }

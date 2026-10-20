@@ -4,6 +4,7 @@ import {
   decodeMimeWords,
   extractBodies,
   getHeader,
+  listAttachmentParts,
   messageDateIso,
   parseAddress,
   replySubject,
@@ -103,5 +104,71 @@ describe('replySubject', () => {
   it('agrega "Re: " una sola vez', () => {
     expect(replySubject('Hola')).toBe('Re: Hola');
     expect(replySubject('RE: Hola')).toBe('RE: Hola');
+  });
+});
+
+describe('listAttachmentParts', () => {
+  it('lista los adjuntos con su partId, sin entrar a un mail adjunto', () => {
+    const payload: gmail_v1.Schema$MessagePart = {
+      partId: '',
+      mimeType: 'multipart/mixed',
+      parts: [
+        {
+          partId: '0',
+          mimeType: 'multipart/alternative',
+          parts: [{ partId: '0.0', mimeType: 'text/plain', body: { data: b64('hola') } }],
+        },
+        {
+          partId: '1',
+          mimeType: 'APPLICATION/PDF',
+          filename: 'informe.pdf',
+          body: { attachmentId: 'ANGjdJ', size: 1234 },
+        },
+        {
+          partId: '2',
+          mimeType: 'text/plain',
+          filename: '=?UTF-8?B?bm90YcOxLnR4dA==?=',
+          body: { data: b64('chico'), size: 5 },
+        },
+        {
+          partId: '3',
+          mimeType: 'message/rfc822',
+          filename: 'reenviado.eml',
+          body: { attachmentId: 'X', size: 10 },
+          parts: [{ partId: '3.0', filename: 'interno.pdf', body: { attachmentId: 'Y' } }],
+        },
+      ],
+    };
+    expect(listAttachmentParts(payload)).toEqual([
+      {
+        partId: '1',
+        filename: 'informe.pdf',
+        mimeType: 'application/pdf',
+        size: 1234,
+        attachmentId: 'ANGjdJ',
+        data: null,
+      },
+      {
+        partId: '2',
+        filename: 'notañ.txt',
+        mimeType: 'text/plain',
+        size: 5,
+        attachmentId: null,
+        data: b64('chico'),
+      },
+      {
+        partId: '3',
+        filename: 'reenviado.eml',
+        mimeType: 'message/rfc822',
+        size: 10,
+        attachmentId: 'X',
+        data: null,
+      },
+    ]);
+  });
+
+  it('sin adjuntos → []', () => {
+    expect(listAttachmentParts(undefined)).toEqual([]);
+    expect(listAttachmentParts({ mimeType: 'text/plain', body: { data: b64('x') } })).toEqual([]);
   });
 });

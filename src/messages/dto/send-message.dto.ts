@@ -1,6 +1,18 @@
 import { Transform } from 'class-transformer';
-import { IsEmail, IsNotEmpty, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
-import { trimString } from '../../common/transforms';
+import {
+  ArrayMaxSize,
+  IsArray,
+  IsEmail,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MaxLength,
+  ValidateNested,
+} from 'class-validator';
+import { toArrayField, trimString } from '../../common/transforms';
+import { MAX_ATTACHMENTS } from '../attachments';
+import { ForwardedAttachmentDto } from './forwarded-attachment.dto';
 import { HasVisibleText } from './has-visible-text.validator';
 
 /** Máximo de HTML aceptado en el cuerpo (los adjuntos van aparte). */
@@ -32,4 +44,16 @@ export class SendMessageDto {
   @MaxLength(MAX_BODY_LENGTH)
   @HasVisibleText()
   body: string;
+
+  /**
+   * "Reenviar": adjuntos de otro mensaje de esta misma casilla, que el backend
+   * baja de Gmail (no hace falta volver a subirlos). Pide además canRead.
+   * Por multipart puede ir como JSON en un solo campo.
+   */
+  @IsOptional()
+  @Transform(toArrayField(ForwardedAttachmentDto))
+  @IsArray({ message: 'forwardedAttachments tiene que ser una lista' })
+  @ArrayMaxSize(MAX_ATTACHMENTS)
+  @ValidateNested({ each: true })
+  forwardedAttachments?: ForwardedAttachmentDto[];
 }

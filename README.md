@@ -122,7 +122,7 @@ src/
   google/                 OAuth con Google, encriptación de tokens, GoogleMailboxClient (Fase 3)
   users/                  user_profiles, gestión de usuarios e invitaciones (Fases 0 y 2)
   mailboxes/              casillas, permisos por casilla, @RequireMailboxAccess (Fase 1)
-  messages/               Recibidos, Enviados, Redactar y Responder contra Gmail (Fase 4)
+  messages/               Recibidos, Enviados, Redactar, Responder y adjuntos contra Gmail (Fases 4 y 4.5)
   scheduled-messages/     Fase 5 (módulo vacío)
   templates/              Fase 6 (módulo vacío)
   drive-access/           Fase 7 (módulo vacío)
@@ -179,11 +179,12 @@ Códigos de respuesta:
 | `GET /mailboxes/oauth/callback` | público | 3 | Vuelta de Google. Redirige a `<FRONTEND_URL>/admin/mailboxes?connected=<id>` o `?connectionError=<code>` |
 | `GET /me/mailboxes` | logueado | 1 | `Mailbox[]` a las que el usuario tiene algún permiso |
 | `GET /mailboxes/:id/messages` | `canRead` | 4 | Últimos 25 de Recibidos → `MessageSummary[]` |
-| `GET /mailboxes/:id/messages/:messageId` | `canRead` | 4 | `MessageDetail` (cuerpo en texto plano); lo marca como leído |
-| `POST /mailboxes/:id/messages` | `canSend` | 4 | Redactar: `{ to, subject, body }` + adjuntos (`attachments`, multipart) |
+| `GET /mailboxes/:id/messages/:messageId` | `canRead` | 4 | `MessageDetail` (cuerpo en texto plano, `attachments`); lo marca como leído |
+| `GET /mailboxes/:id/messages/:messageId/attachments/:attachmentId` | `canRead` | 4.5 | Descarga un adjunto (recibidos y enviados) |
+| `POST /mailboxes/:id/messages` | `canSend` | 4·4.5 | Redactar: `{ to, subject, body, forwardedAttachments? }` + adjuntos (`attachments`, multipart). Reenviar adjuntos pide además `canRead` |
 | `POST /mailboxes/:id/messages/:messageId/reply` | `canSend` | 4 | Responder en el mismo hilo: `{ body }` + adjuntos |
 | `GET /mailboxes/:id/sent` | `canRead` | 4 | Últimos 25 de Enviados → `SentMessageSummary[]` |
-| `GET /mailboxes/:id/sent/:sentId` | `canRead` | 4 | `SentMessageDetail` (cuerpo en HTML sanitizado) |
+| `GET /mailboxes/:id/sent/:sentId` | `canRead` | 4 | `SentMessageDetail` (cuerpo en HTML sanitizado, `attachments`) |
 | `GET /sent/:sentId` | `canRead` en la casilla | 4 | Para "Reenviar": busca el enviado en las casillas que la persona puede leer |
 | `GET /users` | admin | 2 | `AdminUser[]` |
 | `POST /users` | admin | 2 | `{ name, email, role, access }` → invita y devuelve `AdminUser` (201; 409 si el email existe) |
@@ -541,6 +542,45 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
 - A verificar de nuevo: `npm install`, `test`, `test:e2e`.
 - A verificar contra Gmail: listar y abrir recibidos (se marcan como leídos), listar y abrir
   enviados, redactar con y sin adjuntos, responder (queda en el mismo hilo), permisos.
+
+### ✅ Fase 4.5 — Adjuntos completos (ver, descargar y reenviar)
+
+**Qué se construyó**
+- `MessageDetail` y `SentMessageDetail` suman `attachments: { id, filename, mimeType, size }[]`.
+- `GET /mailboxes/:id/messages/:messageId/attachments/:attachmentId` (`canRead`): baja el
+  archivo como descarga (`Content-Disposition: attachment`, nombre con tildes vía
+  `filename*`). Sirve para recibidos y enviados: Gmail usa los mismos ids.
+- Reenviar con los adjuntos originales: Redactar acepta
+  `forwardedAttachments: [{ messageId, attachmentId }]` y el backend los baja de Gmail y
+  los vuelve a adjuntar, sin que el navegador los suba de nuevo. Por multipart va como JSON
+  en un campo (o `forwardedAttachments[0][messageId]=…`).
+- Errores de adjuntos en español: "Máximo 10 adjuntos", "Los adjuntos superan los 20 MB en
+  total", archivos en otro campo. Antes llegaban los de multer en inglés ("Too many files").
+- `MessagesService` se partió en piezas reutilizables (armar el MIME, resolver la respuesta,
+  juntar adjuntos, borradores de Gmail) y se exporta: lo usa la Fase 5.
+
+**Decisiones**
+- **El id del adjunto es el `partId` de Gmail** ("1", "0.2"), no el `attachmentId`: este
+  último es larguísimo y cambia en cada lectura del mensaje. Descargar cuesta un pedido
+  más (leer el mensaje para ubicar la parte), a cambio de ids cortos y estables.
+- **Reenviar adjuntos pide `canRead` además de `canSend`**: bajar un adjunto de la casilla
+  es leerla. Sin eso, alguien con solo `canSend` podría mandarse cualquier archivo de la
+  casilla conociendo su id.
+- **Solo de la misma casilla**: los adjuntos se buscan en la casilla desde la que se envía;
+  un id de otra casilla da 400 ("no existe en esta casilla").
+- **Los límites cuentan todo junto** (subidos + reenviados) y se validan con el tamaño que
+  informa Gmail, antes de bajar nada.
+- Un mail adjunto (`.eml`) cuenta como un adjunto; no se listan sus partes internas. Las
+  imágenes embebidas con nombre también aparecen en la lista.
+
+**Cambios de contrato con el frontend (para la mini-fase front↔back)**
+- Detalle de recibidos/enviados: mostrar `attachments` con link a la descarga.
+- "Reenviar": pasar la casilla y mandar `forwardedAttachments` con los adjuntos del original.
+
+**Verificación**
+- A verificar: `test`, `test:e2e`, `typecheck`, `lint`.
+- A verificar contra Gmail: ver y bajar adjuntos (con tildes en el nombre), reenviar un
+  enviado con sus adjuntos, el mensaje en español con 11 adjuntos.
 
 ### ⏳ Pendiente
 

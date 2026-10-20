@@ -9,6 +9,16 @@ const MBX = '11111111-2222-4333-8444-555555555555';
 const OTHER = '99999999-8888-4777-8666-555555555555';
 const MSG = '18c2f0a1b2c3d4e5';
 
+/** Junta la respuesta en un Buffer (supertest no lo hace solo para tipos binarios). */
+function binaryParser(
+  res: { on(event: string, listener: (chunk: Buffer) => void): unknown },
+  done: (err: Error | null, body: Buffer) => void,
+): void {
+  const chunks: Buffer[] = [];
+  res.on('data', (chunk) => chunks.push(chunk));
+  res.on('end', () => done(null, Buffer.concat(chunks)));
+}
+
 /**
  * Permisos simulados:
  * - USER_ID: lee y envía en MBX; no tiene nada en OTHER.
@@ -29,6 +39,7 @@ describe('Messages (e2e)', () => {
     listSent: jest.fn(),
     getSentMessage: jest.fn(),
     findSentForUser: jest.fn(),
+    getAttachment: jest.fn(),
   };
   const access = {
     hasPermission: jest.fn((userId: string, mailboxId: string, p: 'read' | 'send') =>
@@ -70,6 +81,7 @@ describe('Messages (e2e)', () => {
       ['get', `/mailboxes/${OTHER}/messages/${MSG}`],
       ['get', `/mailboxes/${OTHER}/sent`],
       ['get', `/mailboxes/${OTHER}/sent/${MSG}`],
+      ['get', `/mailboxes/${OTHER}/messages/${MSG}/attachments/1`],
       ['post', `/mailboxes/${OTHER}/messages`],
       ['post', `/mailboxes/${OTHER}/messages/${MSG}/reply`],
     ] as const)('sin acceso a la casilla → 403 en %s %s', async (method, path) => {
@@ -144,6 +156,7 @@ describe('Messages (e2e)', () => {
         MBX,
         { mailboxId: MBX, to: 'ana@x.com', subject: 'Hola', body: '<p>Hola</p>' },
         undefined,
+        USER_ID,
       );
     });
 
@@ -189,8 +202,90 @@ describe('Messages (e2e)', () => {
         .field('subject', 's')
         .field('body', '<p>x</p>');
       for (let i = 0; i < 11; i++) req = req.attach('attachments', Buffer.from('x'), `f${i}.txt`);
-      await req.expect(400);
+      const res = await req.expect(400);
+      expect((res.body as { message: string }).message).toBe('Máximo 10 adjuntos');
       expect(messages.send).not.toHaveBeenCalled();
+    });
+
+    it('adjuntos en otro campo → 400 en español', async () => {
+      const res = await http()
+        .post(`/mailboxes/${MBX}/messages`)
+        .set('Authorization', await asUser())
+        .field('to', 'a@b.com')
+        .field('subject', 's')
+        .field('body', '<p>x</p>')
+        .attach('archivo', Buffer.from('x'), 'f.txt')
+        .expect(400);
+      expect((res.body as { message: string }).message).toMatch(/campo "attachments"/);
+    });
+
+    it('forwardedAttachments por multipart (JSON en un campo) llega como lista validada', async () => {
+      await http()
+        .post(`/mailboxes/${MBX}/messages`)
+        .set('Authorization', await asUser())
+        .field('to', 'a@b.com')
+        .field('subject', 'Fwd: x')
+        .field('body', '<p>x</p>')
+        .field('forwardedAttachments', JSON.stringify([{ messageId: MSG, attachmentId: '1' }]))
+        .expect(201);
+      const dto = messages.send.mock.calls[0][1] as { forwardedAttachments: unknown[] };
+      expect(dto.forwardedAttachments).toEqual([{ messageId: MSG, attachmentId: '1' }]);
+    });
+
+    it('forwardedAttachments por JSON', async () => {
+      await http()
+        .post(`/mailboxes/${MBX}/messages`)
+        .set('Authorization', await asUser())
+        .send({
+          to: 'a@b.com',
+          subject: 's',
+          body: '<p>x</p>',
+          forwardedAttachments: [{ messageId: MSG, attachmentId: '0.1' }],
+        })
+        .expect(201);
+    });
+
+    it.each([
+      ['no es lista', 'nope'],
+      ['id de adjunto inválido', [{ messageId: MSG, attachmentId: '../1' }]],
+      ['campo de más', [{ messageId: MSG, attachmentId: '1', x: 1 }]],
+    ])('forwardedAttachments inválido (%s) → 400', async (_case, forwardedAttachments) => {
+      await http()
+        .post(`/mailboxes/${MBX}/messages`)
+        .set('Authorization', await asUser())
+        .send({ to: 'a@b.com', subject: 's', body: '<p>x</p>', forwardedAttachments })
+        .expect(400);
+      expect(messages.send).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Descargar adjunto', () => {
+    it('devuelve el archivo con nombre, tipo y como descarga', async () => {
+      messages.getAttachment.mockResolvedValue({
+        filename: 'Información.pdf',
+        mimeType: 'application/pdf',
+        content: Buffer.from('%PDF-1.4'),
+      });
+      const res = await http()
+        .get(`/mailboxes/${MBX}/messages/${MSG}/attachments/1`)
+        .set('Authorization', await asUser())
+        .buffer(true)
+        .parse(binaryParser)
+        .expect(200);
+      expect(messages.getAttachment).toHaveBeenCalledWith(MBX, MSG, '1');
+      expect(res.headers['content-type']).toBe('application/pdf');
+      expect(res.headers['content-disposition']).toBe(
+        `attachment; filename="Informacion.pdf"; filename*=UTF-8''Informaci%C3%B3n.pdf`,
+      );
+      expect(Buffer.from(res.body as Buffer).toString()).toBe('%PDF-1.4');
+    });
+
+    it('id de adjunto inválido → 400', async () => {
+      await http()
+        .get(`/mailboxes/${MBX}/messages/${MSG}/attachments/abc`)
+        .set('Authorization', await asUser())
+        .expect(400);
+      expect(messages.getAttachment).not.toHaveBeenCalled();
     });
   });
 
