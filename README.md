@@ -960,8 +960,12 @@ La primera prueba del front conectado encontró dos fallos con los nombres de lo
 - Tests nuevos: nombre "Cotización año 2026.pdf" por multipart llega igual al servicio (e2e);
   la descarga pedida con `Origin` del front expone `Content-Disposition` (e2e);
   `corsOptions` (unit).
-- ⏳ `lint`, `typecheck`, `test`, `test:e2e`, `build`.
-- ⏳ En el front: mandar un adjunto con ñ y descargar un adjunto con su nombre.
+- ✅ `lint` (sin warnings nuevos), `typecheck`, `test` (428), `test:e2e` (173). `build` queda
+  para antes del deploy (reescribe `dist/`, que usaba el backend en marcha).
+- ✅ En el front: adjunto "prueba-ñ-acción.txt" enviado y visto bien en Enviados; descargas
+  guardadas con su nombre ("Cotización año 2026.pdf"); la respuesta trae
+  `Access-Control-Expose-Headers: Content-Disposition`; un programado con "programado-ñandú.txt"
+  salió a horario con el nombre bien.
 
 ### ⏳ Pendiente
 
