@@ -4,7 +4,13 @@ import { MailboxAccessService } from '../src/mailboxes/mailbox-access.service';
 import { MessagesController, SentLookupController } from '../src/messages/messages.controller';
 import { MessagesService } from '../src/messages/messages.service';
 import { RecipientLimitExceededException } from '../src/messages/send-quota.service';
-import { ADMIN_ID, createTestApp, type TestApp, USER_ID } from './utils/test-app';
+import {
+  ADMIN_ID,
+  createTestApp,
+  TEST_FRONT_ORIGIN,
+  type TestApp,
+  USER_ID,
+} from './utils/test-app';
 
 const MBX = '11111111-2222-4333-8444-555555555555';
 const OTHER = '99999999-8888-4777-8666-555555555555';
@@ -230,6 +236,20 @@ describe('Messages (e2e)', () => {
       expect(files[0].size).toBe(9);
     });
 
+    it('los nombres con tildes y ñ llegan bien (UTF-8, no latin1)', async () => {
+      await http()
+        .post(`/mailboxes/${MBX}/messages`)
+        .set('Authorization', await asUser())
+        .field('to', 'ana@x.com')
+        .field('subject', 'Con adjunto')
+        .field('body', '<p>Hola</p>')
+        .attach('attachments', Buffer.from('x'), 'Cotización año 2026.pdf')
+        .expect(201);
+
+      const files = messages.send.mock.calls[0][2] as { originalname: string }[];
+      expect(files.map((f) => f.originalname)).toEqual(['Cotización año 2026.pdf']);
+    });
+
     it.each([
       ['email inválido', { to: 'no-es-email', subject: 's', body: '<p>x</p>' }],
       ['asunto vacío', { to: 'a@b.com', subject: '  ', body: '<p>x</p>' }],
@@ -401,6 +421,23 @@ describe('Messages (e2e)', () => {
         `attachment; filename="Informacion.pdf"; filename*=UTF-8''Informaci%C3%B3n.pdf`,
       );
       expect(Buffer.from(res.body as Buffer).toString()).toBe('%PDF-1.4');
+    });
+
+    it('desde el front (otro origen) el navegador puede leer Content-Disposition', async () => {
+      messages.getAttachment.mockResolvedValue({
+        filename: 'Información.pdf',
+        mimeType: 'application/pdf',
+        content: Buffer.from('%PDF-1.4'),
+      });
+      const res = await http()
+        .get(`/mailboxes/${MBX}/messages/${MSG}/attachments/1`)
+        .set('Authorization', await asUser())
+        .set('Origin', TEST_FRONT_ORIGIN)
+        .buffer(true)
+        .parse(binaryParser)
+        .expect(200);
+      expect(res.headers['access-control-allow-origin']).toBe(TEST_FRONT_ORIGIN);
+      expect(res.headers['access-control-expose-headers']).toBe('Content-Disposition');
     });
 
     it('id de adjunto inválido → 400', async () => {

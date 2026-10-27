@@ -4,18 +4,14 @@ import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { configureApp } from './app.setup';
-import { parseCorsOrigins } from './config/cors';
+import { corsOptions } from './config/cors';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const config = app.get(ConfigService);
 
   app.use(helmet());
-  app.enableCors({
-    origin: parseCorsOrigins(config.get<string>('CORS_ORIGINS')),
-    // Auth va por header Authorization (Bearer), no por cookies.
-    credentials: false,
-  });
+  app.enableCors(corsOptions(config.get<string>('CORS_ORIGINS')));
   configureApp(app);
   app.enableShutdownHooks();
 

@@ -4,12 +4,16 @@ import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { configureApp } from '../../src/app.setup';
 import { JWKS_RESOLVER } from '../../src/auth/auth.constants';
+import { corsOptions } from '../../src/config/cors';
 import { JwtAuthGuard } from '../../src/auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../src/auth/guards/roles.guard';
 import { SupabaseJwtVerifier } from '../../src/auth/supabase-jwt.verifier';
 import type { UserProfile } from '../../src/users/entities/user-profile.entity';
 import { UsersService } from '../../src/users/users.service';
 import { createTestKeys, signTestToken, TEST_AUDIENCE, TEST_SUPABASE_URL } from './jwt';
+
+/** Origen permitido en los e2e (el front en local). */
+export const TEST_FRONT_ORIGIN = 'http://localhost:3000';
 
 export const ADMIN_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 export const USER_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -78,6 +82,7 @@ export async function createTestApp(options: {
   }).compile();
 
   const app = moduleRef.createNestApplication();
+  app.enableCors(corsOptions(TEST_FRONT_ORIGIN));
   configureApp(app);
   await app.init();
 

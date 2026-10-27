@@ -8,6 +8,7 @@ import {
   PayloadTooLargeException,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
+import type { MulterOptions } from '@nestjs/platform-express/multer/interfaces/multer-options.interface';
 import type { Observable } from 'rxjs';
 import {
   ATTACHMENTS_TOO_LARGE,
@@ -16,9 +17,18 @@ import {
   TOO_MANY_ATTACHMENTS,
 } from './attachments';
 
-const MulterFilesInterceptor = FilesInterceptor('attachments', MAX_ATTACHMENTS, {
+/**
+ * `defParamCharset: 'utf8'`: los navegadores mandan el nombre del archivo en UTF-8,
+ * pero multer lo lee como latin1 si no se le dice otra cosa, y "ñ" quedaba "Ã±".
+ * Se tipa aparte porque el tipo de Nest no declara esta opción de multer (Nest se
+ * las pasa todas tal cual).
+ */
+const multerOptions: MulterOptions & { defParamCharset: 'utf8' } = {
   limits: { fileSize: MAX_ATTACHMENTS_TOTAL_BYTES, files: MAX_ATTACHMENTS },
-});
+  defParamCharset: 'utf8',
+};
+
+const MulterFilesInterceptor = FilesInterceptor('attachments', MAX_ATTACHMENTS, multerOptions);
 
 /**
  * Mensajes de multer (en inglés) → mensajes para mostrar en el frontend. Se

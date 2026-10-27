@@ -1,4 +1,4 @@
-import { parseCorsOrigins } from './cors';
+import { corsOptions, parseCorsOrigins } from './cors';
 
 describe('parseCorsOrigins', () => {
   it('devuelve [] si no hay valor', () => {
@@ -10,5 +10,15 @@ describe('parseCorsOrigins', () => {
     expect(
       parseCorsOrigins('http://localhost:3000, https://corebio-email-collection.vercel.app/ ,,'),
     ).toEqual(['http://localhost:3000', 'https://corebio-email-collection.vercel.app']);
+  });
+});
+
+describe('corsOptions', () => {
+  it('orígenes limpios, sin cookies y con Content-Disposition visible para el front', () => {
+    expect(corsOptions('http://localhost:3000/')).toEqual({
+      origin: ['http://localhost:3000'],
+      credentials: false,
+      exposedHeaders: ['Content-Disposition'],
+    });
   });
 });

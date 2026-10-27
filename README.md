@@ -939,6 +939,30 @@ Tareas de configuración (no de código) antes de presentarlo a Corebio:
   `INBOX` → 400); contactos (grupos, miembros, lista y búsqueda con `q`); `cc`/`bcc` en el
   detalle de enviados y `cc` en el de recibidos.
 
+### 🔧 Ajuste — Nombres de adjuntos (prueba del front, 27/10)
+
+La primera prueba del front conectado encontró dos fallos con los nombres de los adjuntos.
+
+**Qué se arregló**
+- **Nombres con tildes o ñ al subir**: "prueba-ñ.txt" quedaba "prueba-Ã±.txt" en Gmail.
+  Multer lee el nombre del archivo como latin1 si no se le indica otra cosa, y los navegadores
+  lo mandan en UTF-8. Ahora el interceptor de adjuntos usa `defParamCharset: 'utf8'`. Afecta
+  a Redactar, Responder, programar y editar programados. Los mails ya enviados quedan con el
+  nombre roto.
+- **Al descargar se perdía el nombre** ("adjunto (1).pdf"): la descarga va del navegador al
+  backend, que está en otro origen, y el navegador oculta `Content-Disposition` si CORS no lo
+  expone. Ahora CORS manda `Access-Control-Expose-Headers: Content-Disposition`. Vale para los
+  adjuntos de mensajes y de programados, en local y en producción (Vercel → Railway).
+- La configuración de CORS pasó a `corsOptions()` en `src/config/cors.ts`, y los e2e la usan
+  igual que producción.
+
+**Verificación**
+- Tests nuevos: nombre "Cotización año 2026.pdf" por multipart llega igual al servicio (e2e);
+  la descarga pedida con `Origin` del front expone `Content-Disposition` (e2e);
+  `corsOptions` (unit).
+- ⏳ `lint`, `typecheck`, `test`, `test:e2e`, `build`.
+- ⏳ En el front: mandar un adjunto con ñ y descargar un adjunto con su nombre.
+
 ### ⏳ Pendiente
 
 - **Mini-fase front↔back**: conectar el frontend al backend (los cambios de contrato están en
