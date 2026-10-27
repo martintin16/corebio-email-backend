@@ -969,7 +969,7 @@ La primera prueba del front conectado encontró dos fallos con los nombres de lo
   `Access-Control-Expose-Headers: Content-Disposition`; un programado con "programado-ñandú.txt"
   salió a horario con el nombre bien.
 
-### Fase 9 — Mails nuevos sin recargar
+### ✅ Fase 9 — Mails nuevos sin recargar
 
 **Qué se construyó**
 - `GET /mailboxes/:id/sync-state` (`canRead`) → `{ historyId, scheduledVersion }`.
@@ -992,8 +992,9 @@ La primera prueba del front conectado encontró dos fallos con los nombres de lo
 **Verificación**
 - Tests nuevos: `SyncStateService` (unit: historyId, versión de programados, errores de
   Google) y `sync-state` (e2e: 200 con canRead, 403 sin acceso y para admin, 400, 401).
-- ⏳ `lint`, `typecheck`, `test`, `test:e2e`, `build`.
-- ⏳ Con el front: un mail nuevo aparece solo en menos de un minuto.
+- ✅ `lint` (sin errores), `typecheck`, `test` (431), `test:e2e` (176), `build`.
+- ✅ Con el front: un mail mandado a secretaría apareció solo, sin recargar, a los 13 segundos;
+  con la pestaña oculta no se consulta.
 
 ### ⏳ Pendiente
 
