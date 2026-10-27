@@ -129,6 +129,7 @@ src/
   templates/              plantillas por casilla (Fase 6)
   drive-access/           compartir carpetas y archivos del Drive de una casilla (Fase 7)
   contacts/               contactos y grupos de Google Contacts, solo lectura (Fase 8)
+  sync/                   estado de sincronización de cada casilla, para ver mails nuevos sin recargar
 test/
   utils/jwt.ts            simula a Supabase Auth con claves ES256 propias
   utils/test-app.ts       app de prueba con la auth real y Supabase/DB simulados
@@ -182,6 +183,7 @@ Códigos de respuesta:
 | `GET /mailboxes/oauth/callback` | público | 3 | Vuelta de Google. Redirige a `<FRONTEND_URL>/admin/mailboxes?connected=<id>` o `?connectionError=<code>` |
 | `GET /me/mailboxes` | logueado | 1·6 | `Mailbox[]` a las que el usuario tiene algún permiso, con `canRead` y `canSend` |
 | `GET /mailboxes/:id/messages` | `canRead` | 4·8 | Últimos 25 de Recibidos → `MessageSummary[]` (con `labelIds`). `?labelId=Label_…` → los de esa etiqueta |
+| `GET /mailboxes/:id/sync-state` | `canRead` | 9 | `{ historyId, scheduledVersion }`: si cambia alguno, hay novedades (mails o programados) y el front vuelve a pedir las listas |
 | `GET /mailboxes/:id/labels` | `canRead` | 8 | Etiquetas de usuario de la casilla → `MailLabel[]` (`{ id, name, color }`) |
 | `PATCH /mailboxes/:id/messages/:messageId/labels` | `canRead` | 8 | `{ add?, remove? }` (ids de etiqueta) → aplica a la conversación → `{ labelIds }` |
 | `GET /mailboxes/:id/messages/:messageId` | `canRead` | 4·8 | `MessageDetail` (cuerpo en texto plano, `cc`, `attachments`); lo marca como leído |
@@ -966,6 +968,32 @@ La primera prueba del front conectado encontró dos fallos con los nombres de lo
   guardadas con su nombre ("Cotización año 2026.pdf"); la respuesta trae
   `Access-Control-Expose-Headers: Content-Disposition`; un programado con "programado-ñandú.txt"
   salió a horario con el nombre bien.
+
+### Fase 9 — Mails nuevos sin recargar
+
+**Qué se construyó**
+- `GET /mailboxes/:id/sync-state` (`canRead`) → `{ historyId, scheduledVersion }`.
+  - `historyId` es el de Gmail (`users.getProfile`): cambia con cualquier novedad de la
+    casilla (llega un mail, se envía, se lee, se etiqueta).
+  - `scheduledVersion` cambia al crear, editar, cancelar, enviar o fallar un programado
+    (cantidad de filas + última modificación).
+- El front lo consulta cada 60 segundos con la pestaña visible, y al volver a ella. Si algo
+  cambió, vuelve a pedir las listas. Tiene además un botón "Actualizar".
+
+**Decisiones**
+- **Preguntar cada minuto, no push de Gmail (Pub/Sub).** El push es instantáneo, pero suma
+  Google Cloud Pub/Sub, renovar la suscripción cada 7 días y conexiones abiertas en Railway.
+  Para pocas personas con la app abierta no hace falta.
+- **Barato a propósito.** `getProfile` cuesta 1 unidad de cuota de Gmail; volver a pedir
+  Recibidos, unas 100. Las listas se piden solo cuando cambió algo. 10 personas con la app
+  abierta todo el día son unos 5.000 pedidos por día, lejos del límite.
+- Sin acceso implícito para admin, como el resto de la casilla.
+
+**Verificación**
+- Tests nuevos: `SyncStateService` (unit: historyId, versión de programados, errores de
+  Google) y `sync-state` (e2e: 200 con canRead, 403 sin acceso y para admin, 400, 401).
+- ⏳ `lint`, `typecheck`, `test`, `test:e2e`, `build`.
+- ⏳ Con el front: un mail nuevo aparece solo en menos de un minuto.
 
 ### ⏳ Pendiente
 

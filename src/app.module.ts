@@ -10,6 +10,7 @@ import { HealthModule } from './health/health.module';
 import { MailboxesModule } from './mailboxes/mailboxes.module';
 import { MessagesModule } from './messages/messages.module';
 import { ScheduledMessagesModule } from './scheduled-messages/scheduled-messages.module';
+import { SyncModule } from './sync/sync.module';
 import { TemplatesModule } from './templates/templates.module';
 import { UsersModule } from './users/users.module';
 
@@ -41,6 +42,7 @@ import { UsersModule } from './users/users.module';
     TemplatesModule,
     DriveAccessModule,
     ContactsModule,
+    SyncModule,
   ],
 })
 export class AppModule {}
