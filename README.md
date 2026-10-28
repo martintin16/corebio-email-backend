@@ -996,7 +996,7 @@ La primera prueba del front conectado encontró dos fallos con los nombres de lo
 - ✅ Con el front: un mail mandado a secretaría apareció solo, sin recargar, a los 13 segundos;
   con la pestaña oculta no se consulta.
 
-### Fase 10 — Ver más de 25 mails
+### ✅ Fase 10 — Ver más de 25 mails
 
 **Qué se construyó**
 - Recibidos (también filtrado por etiqueta) y Enviados devuelven una página:
@@ -1015,8 +1015,9 @@ La primera prueba del front conectado encontró dos fallos con los nombres de lo
 **Verificación**
 - Tests: unit (pageToken y nextPageToken en Recibidos y Enviados) y e2e (`?pageToken=` llega al
   servicio, la respuesta trae `nextPageToken`, pageToken inválido → 400).
-- ⏳ `lint`, `typecheck`, `test`, `test:e2e`, `build`.
-- ⏳ Con el front: "Cargar más" en Enviados de tesorería (tiene más de 25).
+- ✅ `lint` (sin errores), `typecheck`, `test` (433), `test:e2e` (178), `build`.
+- ✅ Con el front: Enviados de tesorería con 26 → 25 y "Cargar más" agrega el que falta, sin
+  repetidos; con la segunda página cargada, un mail nuevo aparece arriba y no se pierde nada.
 
 ### ⏳ Pendiente
 
