@@ -49,6 +49,7 @@ import type {
   ForwardedAttachmentRef,
   MailLabel,
   MessageDetail,
+  MessagePage,
   MessageSummary,
   SentMessageDetail,
   SentMessageSummary,
@@ -137,10 +138,19 @@ export class MessagesService {
    * Últimos de Recibidos, o con `labelId` los de esa etiqueta (estén o no en
    * Recibidos: una etiqueta también agrupa mails archivados).
    */
-  async listInbox(mailboxId: string, labelId?: string): Promise<MessageSummary[]> {
+  async listInbox(
+    mailboxId: string,
+    labelId?: string,
+    pageToken?: string,
+  ): Promise<MessagePage<MessageSummary>> {
     const apis = await this.google.forMailbox(mailboxId);
-    const messages = await this.listByLabel(apis, labelId ?? 'INBOX', ['From', 'Subject', 'Date']);
-    return messages.map(toMessageSummary);
+    const page = await this.listByLabel(
+      apis,
+      labelId ?? 'INBOX',
+      ['From', 'Subject', 'Date'],
+      pageToken,
+    );
+    return { items: page.messages.map(toMessageSummary), nextPageToken: page.nextPageToken };
   }
 
   // ---------------------------------------------------------------------------
@@ -246,10 +256,10 @@ export class MessagesService {
   // Enviados
   // ---------------------------------------------------------------------------
 
-  async listSent(mailboxId: string): Promise<SentMessageSummary[]> {
+  async listSent(mailboxId: string, pageToken?: string): Promise<MessagePage<SentMessageSummary>> {
     const apis = await this.google.forMailbox(mailboxId);
-    const messages = await this.listByLabel(apis, 'SENT', ['To', 'Subject', 'Date']);
-    return messages.map(toSentSummary);
+    const page = await this.listByLabel(apis, 'SENT', ['To', 'Subject', 'Date'], pageToken);
+    return { items: page.messages.map(toSentSummary), nextPageToken: page.nextPageToken };
   }
 
   async getSentMessage(mailboxId: string, sentId: string): Promise<SentMessageDetail> {
@@ -608,19 +618,22 @@ export class MessagesService {
 
   // ---------------------------------------------------------------------------
 
+  /** Una página de LIST_LIMIT mensajes de la etiqueta; con `pageToken`, la siguiente. */
   private listByLabel(
     apis: MailboxGoogleApis,
     label: string,
     headers: string[],
-  ): Promise<GmailMessage[]> {
+    pageToken?: string,
+  ): Promise<{ messages: GmailMessage[]; nextPageToken: string | null }> {
     return this.call(apis.mailboxId, async () => {
       const { data } = await apis.gmail.users.messages.list({
         userId: 'me',
         labelIds: [label],
         maxResults: LIST_LIMIT,
+        ...(pageToken ? { pageToken } : {}),
       });
       const ids = (data.messages ?? []).map((m) => m.id).filter((id): id is string => !!id);
-      return mapWithConcurrency(ids, GMAIL_CONCURRENCY, async (id) => {
+      const messages = await mapWithConcurrency(ids, GMAIL_CONCURRENCY, async (id) => {
         const res = await apis.gmail.users.messages.get({
           userId: 'me',
           id,
@@ -629,6 +642,7 @@ export class MessagesService {
         });
         return res.data;
       });
+      return { messages, nextPageToken: data.nextPageToken ?? null };
     });
   }
 

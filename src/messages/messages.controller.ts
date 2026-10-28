@@ -24,15 +24,26 @@ import { MessagesService } from './messages.service';
 import type {
   MailLabel,
   MessageDetail,
+  MessagePage,
   MessageSummary,
   SentMessageDetail,
   SentMessageSummary,
 } from './messages.types';
 import {
+  PAGE_TOKEN,
   ParseAttachmentIdPipe,
   ParseGmailIdPipe,
   USER_LABEL_ID,
 } from './pipes/parse-gmail-id.pipe';
+
+/** `?pageToken=` opcional: el `nextPageToken` de la página anterior. */
+function checkPageToken(pageToken: unknown): string | undefined {
+  if (pageToken === undefined || pageToken === '') return undefined;
+  if (typeof pageToken !== 'string' || !PAGE_TOKEN.test(pageToken)) {
+    throw new BadRequestException('pageToken inválido');
+  }
+  return pageToken;
+}
 
 @Controller('mailboxes/:mailboxId')
 export class MessagesController {
@@ -40,17 +51,21 @@ export class MessagesController {
 
   // --- Recibidos ---------------------------------------------------------------
 
-  /** `?labelId=Label_…` → los de esa etiqueta (también archivados), en vez de Recibidos. */
+  /**
+   * Una página de Recibidos (25). `?labelId=Label_…` → los de esa etiqueta
+   * (también archivados). `?pageToken=` → la página siguiente.
+   */
   @RequireMailboxAccess('read')
   @Get('messages')
   listInbox(
     @Param('mailboxId', ParseUUIDPipe) mailboxId: string,
     @Query('labelId') labelId?: string,
-  ): Promise<MessageSummary[]> {
+    @Query('pageToken') pageToken?: string,
+  ): Promise<MessagePage<MessageSummary>> {
     if (labelId !== undefined && !USER_LABEL_ID.test(labelId)) {
       throw new BadRequestException('labelId inválido');
     }
-    return this.messages.listInbox(mailboxId, labelId);
+    return this.messages.listInbox(mailboxId, labelId, checkPageToken(pageToken));
   }
 
   // --- Etiquetas -----------------------------------------------------------------
@@ -121,9 +136,13 @@ export class MessagesController {
   // --- Enviados ----------------------------------------------------------------
 
   @RequireMailboxAccess('read')
+  /** Una página de Enviados (25); `?pageToken=` → la siguiente. */
   @Get('sent')
-  listSent(@Param('mailboxId', ParseUUIDPipe) mailboxId: string): Promise<SentMessageSummary[]> {
-    return this.messages.listSent(mailboxId);
+  listSent(
+    @Param('mailboxId', ParseUUIDPipe) mailboxId: string,
+    @Query('pageToken') pageToken?: string,
+  ): Promise<MessagePage<SentMessageSummary>> {
+    return this.messages.listSent(mailboxId, checkPageToken(pageToken));
   }
 
   @RequireMailboxAccess('read')

@@ -182,7 +182,7 @@ Códigos de respuesta:
 | `POST /mailboxes/:id/reconnect` | admin | 3 | Primera conexión o reconexión con Google → `{ authUrl }` (llevar el navegador ahí) |
 | `GET /mailboxes/oauth/callback` | público | 3 | Vuelta de Google. Redirige a `<FRONTEND_URL>/admin/mailboxes?connected=<id>` o `?connectionError=<code>` |
 | `GET /me/mailboxes` | logueado | 1·6 | `Mailbox[]` a las que el usuario tiene algún permiso, con `canRead` y `canSend` |
-| `GET /mailboxes/:id/messages` | `canRead` | 4·8 | Últimos 25 de Recibidos → `MessageSummary[]` (con `labelIds`). `?labelId=Label_…` → los de esa etiqueta |
+| `GET /mailboxes/:id/messages` | `canRead` | 4·8·10 | Una página (25) de Recibidos → `{ items: MessageSummary[], nextPageToken }` (con `labelIds`). `?labelId=Label_…` → los de esa etiqueta. `?pageToken=` → la página siguiente |
 | `GET /mailboxes/:id/sync-state` | `canRead` | 9 | `{ historyId, scheduledVersion }`: si cambia alguno, hay novedades (mails o programados) y el front vuelve a pedir las listas |
 | `GET /mailboxes/:id/labels` | `canRead` | 8 | Etiquetas de usuario de la casilla → `MailLabel[]` (`{ id, name, color }`) |
 | `PATCH /mailboxes/:id/messages/:messageId/labels` | `canRead` | 8 | `{ add?, remove? }` (ids de etiqueta) → aplica a la conversación → `{ labelIds }` |
@@ -190,7 +190,7 @@ Códigos de respuesta:
 | `GET /mailboxes/:id/messages/:messageId/attachments/:attachmentId` | `canRead` | 4.5 | Descarga un adjunto (recibidos y enviados) |
 | `POST /mailboxes/:id/messages` | `canSend` | 4·4.5·8 | Redactar: `{ to, cc?, bcc?, subject, body, forwardedAttachments? }` (destinatarios: emails separados por coma) + adjuntos (`attachments`, multipart). Reenviar adjuntos pide además `canRead`. Cupo diario → 429 `RECIPIENT_LIMIT_EXCEEDED` |
 | `POST /mailboxes/:id/messages/:messageId/reply` | `canSend` | 4 | Responder en el mismo hilo: `{ body }` + adjuntos |
-| `GET /mailboxes/:id/sent` | `canRead` | 4 | Últimos 25 de Enviados → `SentMessageSummary[]` |
+| `GET /mailboxes/:id/sent` | `canRead` | 4·10 | Una página (25) de Enviados → `{ items: SentMessageSummary[], nextPageToken }`. `?pageToken=` → la siguiente |
 | `GET /mailboxes/:id/sent/:sentId` | `canRead` | 4·8 | `SentMessageDetail` (cuerpo en HTML sanitizado, `cc`, `bcc`, `attachments`) |
 | `GET /sent/:sentId` | `canRead` en la casilla | 4 | Para "Reenviar": busca el enviado en las casillas que la persona puede leer |
 | `GET /mailboxes/:id/scheduled-messages` | `canRead` | 5 | Programados de la casilla (pendientes, enviándose y con error) → `ScheduledMessage[]` |
@@ -995,6 +995,28 @@ La primera prueba del front conectado encontró dos fallos con los nombres de lo
 - ✅ `lint` (sin errores), `typecheck`, `test` (431), `test:e2e` (176), `build`.
 - ✅ Con el front: un mail mandado a secretaría apareció solo, sin recargar, a los 13 segundos;
   con la pestaña oculta no se consulta.
+
+### Fase 10 — Ver más de 25 mails
+
+**Qué se construyó**
+- Recibidos (también filtrado por etiqueta) y Enviados devuelven una página:
+  `{ items, nextPageToken }`. Con `?pageToken=<nextPageToken>` se pide la siguiente; `null` = no
+  hay más. Es el `pageToken` de `users.messages.list` de Gmail.
+- `pageToken` inválido (caracteres raros, repetido) → 400.
+
+**Cambio de contrato**: antes devolvían un array. El front se actualiza en la misma ronda
+(`feat/conexion-backend`): botón "Cargar más" al final de la lista.
+
+**Decisiones**
+- **Páginas de 25 y "Cargar más", no todo de una.** Cada mail de la lista es un pedido a Gmail
+  (los encabezados); traer 1000 de una sería lento y gastaría cuota.
+- **Programados no se pagina**: sale de la base y el volumen esperado es chico.
+
+**Verificación**
+- Tests: unit (pageToken y nextPageToken en Recibidos y Enviados) y e2e (`?pageToken=` llega al
+  servicio, la respuesta trae `nextPageToken`, pageToken inválido → 400).
+- ⏳ `lint`, `typecheck`, `test`, `test:e2e`, `build`.
+- ⏳ Con el front: "Cargar más" en Enviados de tesorería (tiene más de 25).
 
 ### ⏳ Pendiente
 

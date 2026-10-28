@@ -68,3 +68,13 @@ export interface DownloadedAttachment {
   mimeType: string;
   content: Buffer;
 }
+
+/**
+ * Una página de una lista de Gmail (Recibidos, una etiqueta, Enviados).
+ * `nextPageToken` se pasa como `?pageToken=` para pedir la siguiente; null =
+ * no hay más.
+ */
+export interface MessagePage<T> {
+  items: T[];
+  nextPageToken: string | null;
+}

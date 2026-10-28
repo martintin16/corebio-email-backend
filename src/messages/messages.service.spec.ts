@@ -154,7 +154,9 @@ describe('MessagesService', () => {
 
   describe('Recibidos', () => {
     it('lista los últimos de INBOX con los encabezados necesarios', async () => {
-      const [summary] = await service.listInbox(MBX);
+      const page = await service.listInbox(MBX);
+      const [summary] = page.items;
+      expect(page.nextPageToken).toBeNull();
       expect(gmail.users.messages.list).toHaveBeenCalledWith({
         userId: 'me',
         labelIds: ['INBOX'],
@@ -172,6 +174,21 @@ describe('MessagesService', () => {
         unread: true,
         labelIds: [],
       });
+    });
+
+    it('pide la página siguiente con pageToken y devuelve el nextPageToken de Gmail', async () => {
+      gmail.users.messages.list.mockResolvedValue({
+        data: { messages: [{ id: 'msg00001' }], nextPageToken: '0987654321' },
+      });
+      const page = await service.listInbox(MBX, undefined, '1234567890');
+      expect(gmail.users.messages.list).toHaveBeenCalledWith({
+        userId: 'me',
+        labelIds: ['INBOX'],
+        maxResults: LIST_LIMIT,
+        pageToken: '1234567890',
+      });
+      expect(page.nextPageToken).toBe('0987654321');
+      expect(page.items).toHaveLength(1);
     });
 
     it('el detalle devuelve el cuerpo en texto plano y lo marca como leído', async () => {
@@ -225,6 +242,16 @@ describe('MessagesService', () => {
 
   describe('Enviados', () => {
     const sentMessage = { ...inboxMessage, id: 'sent0001', labelIds: ['SENT'] };
+
+    it('lista una página de SENT; con pageToken, la siguiente', async () => {
+      gmail.users.messages.get.mockResolvedValue({ data: sentMessage });
+      const page = await service.listSent(MBX, '555');
+      expect(gmail.users.messages.list).toHaveBeenCalledWith(
+        expect.objectContaining({ labelIds: ['SENT'], pageToken: '555' }),
+      );
+      expect(page.items[0]?.id).toBe('sent0001');
+      expect(page.nextPageToken).toBeNull();
+    });
 
     it('el detalle devuelve HTML sanitizado y la casilla', async () => {
       gmail.users.messages.get.mockResolvedValue({ data: sentMessage });
@@ -717,7 +744,7 @@ describe('MessagesService', () => {
       gmail.users.messages.get.mockResolvedValue({
         data: { ...inboxMessage, labelIds: ['INBOX', 'UNREAD', 'Label_1', 'CATEGORY_UPDATES'] },
       });
-      const [summary] = await service.listInbox(MBX);
+      const [summary] = (await service.listInbox(MBX)).items;
       expect(summary.labelIds).toEqual(['Label_1']);
     });
 

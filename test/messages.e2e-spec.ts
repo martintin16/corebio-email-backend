@@ -117,15 +117,38 @@ describe('Messages (e2e)', () => {
     });
 
     it('con canRead puede leer', async () => {
-      messages.listInbox.mockResolvedValue([]);
+      messages.listInbox.mockResolvedValue({ items: [], nextPageToken: null });
       await http()
         .get(`/mailboxes/${MBX}/messages`)
         .set('Authorization', await t.authHeader(ADMIN_ID))
-        .expect(200, []);
+        .expect(200, { items: [], nextPageToken: null });
     });
   });
 
   describe('lectura', () => {
+    it('Recibidos y Enviados paginan con ?pageToken= y devuelven nextPageToken', async () => {
+      messages.listInbox.mockResolvedValue({ items: [], nextPageToken: '42' });
+      messages.listSent.mockResolvedValue({ items: [], nextPageToken: null });
+      await http()
+        .get(`/mailboxes/${MBX}/messages?pageToken=12345&labelId=Label_7`)
+        .set('Authorization', await asUser())
+        .expect(200, { items: [], nextPageToken: '42' });
+      expect(messages.listInbox).toHaveBeenCalledWith(MBX, 'Label_7', '12345');
+      await http()
+        .get(`/mailboxes/${MBX}/sent?pageToken=678`)
+        .set('Authorization', await asUser())
+        .expect(200, { items: [], nextPageToken: null });
+      expect(messages.listSent).toHaveBeenCalledWith(MBX, '678');
+    });
+
+    it('pageToken con caracteres raros → 400', async () => {
+      await http()
+        .get(`/mailboxes/${MBX}/messages?pageToken=${encodeURIComponent('a b<c>')}`)
+        .set('Authorization', await asUser())
+        .expect(400);
+      expect(messages.listInbox).not.toHaveBeenCalled();
+    });
+
     it('GET detalle pasa casilla e id', async () => {
       messages.getInboxMessage.mockResolvedValue({ id: MSG });
       await http()
@@ -389,12 +412,12 @@ describe('Messages (e2e)', () => {
     });
 
     it('GET messages?labelId= filtra por etiqueta; un labelId de sistema → 400', async () => {
-      messages.listInbox.mockResolvedValue([]);
+      messages.listInbox.mockResolvedValue({ items: [], nextPageToken: null });
       await http()
         .get(`/mailboxes/${MBX}/messages?labelId=Label_7`)
         .set('Authorization', await asUser())
         .expect(200);
-      expect(messages.listInbox).toHaveBeenCalledWith(MBX, 'Label_7');
+      expect(messages.listInbox).toHaveBeenCalledWith(MBX, 'Label_7', undefined);
       await http()
         .get(`/mailboxes/${MBX}/messages?labelId=TRASH`)
         .set('Authorization', await asUser())
