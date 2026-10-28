@@ -1019,6 +1019,18 @@ La primera prueba del front conectado encontró dos fallos con los nombres de lo
 - ✅ Con el front: Enviados de tesorería con 26 → 25 y "Cargar más" agrega el que falta, sin
   repetidos; con la segunda página cargada, un mail nuevo aparece arriba y no se pierde nada.
 
+### 🔧 Ajuste — Tamaño de los pedidos (antes del deploy)
+
+- JSON y formularios aceptan hasta **2 MB** (`configureApp`): el límite de Express por defecto era
+  100 KB, mucho menos que el cuerpo que aceptan los DTOs (`MAX_BODY_LENGTH`, 1.000.000 de caracteres).
+  Una plantilla larga fallaba antes de llegar a la validación. Si se pasa: 413
+  "El contenido es demasiado grande (máximo 2 MB)".
+- En los envíos con adjuntos (multipart), el cuerpo del mail viaja como campo de texto: su máximo pasó
+  de 1 MB (el de multer) a 2 MB, con 413 "El texto del mensaje es demasiado largo (máximo 2 MB)".
+- Tests: e2e de plantillas (300 KB pasa, más de 2 MB → 413 en castellano) y unit de la traducción del
+  error de multer.
+- ⏳ `lint`, `typecheck`, `test`, `test:e2e`, `build`.
+
 ### ⏳ Pendiente
 
 - **Mini-fase front↔back**: conectar el frontend al backend (los cambios de contrato están en

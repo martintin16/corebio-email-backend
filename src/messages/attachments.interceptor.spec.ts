@@ -21,6 +21,15 @@ describe('translateMulterError', () => {
     },
   );
 
+  it.each(['Field value too long', 'Field value too long - body'])(
+    '"%s" → 413 "texto demasiado largo"',
+    (message) => {
+      const result = translateMulterError(new PayloadTooLargeException(message));
+      expect(result).toBeInstanceOf(PayloadTooLargeException);
+      expect(result.message).toMatch(/demasiado largo/);
+    },
+  );
+
   it.each(['File too large', 'File too large - attachments'])(
     '"%s" → 413 en español',
     (message) => {

@@ -23,8 +23,17 @@ import {
  * Se tipa aparte porque el tipo de Nest no declara esta opción de multer (Nest se
  * las pasa todas tal cual).
  */
+/** Un campo de texto del formulario (el cuerpo HTML del mail), en bytes. */
+const MAX_FIELD_BYTES = 2 * 1024 * 1024;
+
 const multerOptions: MulterOptions & { defParamCharset: 'utf8' } = {
-  limits: { fileSize: MAX_ATTACHMENTS_TOTAL_BYTES, files: MAX_ATTACHMENTS },
+  // fieldSize: el cuerpo del mail viaja como campo de texto del formulario;
+  // el máximo por defecto de multer (1 MB) es menos que lo que acepta el DTO.
+  limits: {
+    fileSize: MAX_ATTACHMENTS_TOTAL_BYTES,
+    files: MAX_ATTACHMENTS,
+    fieldSize: MAX_FIELD_BYTES,
+  },
   defParamCharset: 'utf8',
 };
 
@@ -39,6 +48,10 @@ const MulterFilesInterceptor = FilesInterceptor('attachments', MAX_ATTACHMENTS, 
 const MULTER_MESSAGES: [RegExp, () => HttpException][] = [
   [/^File too large/i, () => new PayloadTooLargeException(ATTACHMENTS_TOO_LARGE)],
   [/^Too many files/i, () => new BadRequestException(TOO_MANY_ATTACHMENTS)],
+  [
+    /^Field value too long/i,
+    () => new PayloadTooLargeException('El texto del mensaje es demasiado largo (máximo 2 MB)'),
+  ],
   [
     /^Unexpected (file )?field/i,
     () =>

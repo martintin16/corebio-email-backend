@@ -90,6 +90,30 @@ describe('Templates (e2e)', () => {
     });
   });
 
+  describe('tamaño del pedido', () => {
+    it('una plantilla de 300 KB pasa (antes el límite de JSON era 100 KB)', async () => {
+      const body = `<p>${'a'.repeat(300_000)}</p>`;
+      await http()
+        .post(base)
+        .set('Authorization', await asUser())
+        .send({ name: 'Larga', body })
+        .expect(201);
+    });
+
+    it('más de 2 MB → 413 en castellano', async () => {
+      const body = `<p>${'a'.repeat(2_200_000)}</p>`;
+      const res = await http()
+        .post(base)
+        .set('Authorization', await asUser())
+        .send({ name: 'Enorme', body })
+        .expect(413);
+      expect((res.body as { message: string }).message).toBe(
+        'El contenido es demasiado grande (máximo 2 MB)',
+      );
+      expect(templates.create).not.toHaveBeenCalled();
+    });
+  });
+
   describe('CRUD', () => {
     it('lista con canSend', async () => {
       await http()
