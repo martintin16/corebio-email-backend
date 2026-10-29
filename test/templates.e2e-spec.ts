@@ -119,9 +119,7 @@ describe('Templates (e2e)', () => {
         .set('Authorization', await asUser())
         .send({ name: 'X', body: '<p>Hola</p>', foo: 1 })
         .expect(400);
-      expect((res.body as { message: string[] }).message).toEqual([
-        'foo no es un campo permitido',
-      ]);
+      expect((res.body as { message: string[] }).message).toEqual(['foo no es un campo permitido']);
     });
 
     it('más de 2 MB → 413 en castellano', async () => {

@@ -1044,7 +1044,9 @@ La primera prueba del front conectado encontró dos fallos con los nombres de lo
   (`validationExceptionFactory` en el ValidationPipe global).
 - Tests: unit de los mensajes y e2e de plantillas (cuerpo de más de 1.000.000 de caracteres y campo de
   más → 400 en castellano).
-- ⏳ `lint`, `typecheck`, `test`, `test:e2e`, `build`.
+- ✅ `typecheck`, `test` (439), `test:e2e` (182), `build`; `lint` con un error de formato en un test, ya
+  corregido. Desde la app y directo al backend: más de 1.000.000 de caracteres y el campo de más dan 400
+  en castellano.
 
 ### ⏳ Pendiente
 
