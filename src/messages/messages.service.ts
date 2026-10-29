@@ -287,23 +287,27 @@ export class MessagesService {
    */
   async getThread(mailboxId: string, messageId: string): Promise<ThreadMessage[]> {
     const apis = await this.google.forMailbox(mailboxId);
-    return this.call(apis.mailboxId, async () => {
-      const { data: message } = await apis.gmail.users.messages.get({
-        userId: 'me',
-        id: messageId,
-        format: 'minimal',
-      });
-      if (!message.threadId) return [];
-      const { data: thread } = await apis.gmail.users.threads.get({
-        userId: 'me',
-        id: message.threadId,
-        format: 'full',
-      });
-      return (thread.messages ?? [])
-        .filter((m) => !hasLabel(m, 'DRAFT') && (!isTrashed(m) || m.id === messageId))
-        .sort((a, b) => Number(a.internalDate ?? 0) - Number(b.internalDate ?? 0))
-        .map(toThreadMessage);
-    }, 'El mensaje no existe');
+    return this.call(
+      apis.mailboxId,
+      async () => {
+        const { data: message } = await apis.gmail.users.messages.get({
+          userId: 'me',
+          id: messageId,
+          format: 'minimal',
+        });
+        if (!message.threadId) return [];
+        const { data: thread } = await apis.gmail.users.threads.get({
+          userId: 'me',
+          id: message.threadId,
+          format: 'full',
+        });
+        return (thread.messages ?? [])
+          .filter((m) => !hasLabel(m, 'DRAFT') && (!isTrashed(m) || m.id === messageId))
+          .sort((a, b) => Number(a.internalDate ?? 0) - Number(b.internalDate ?? 0))
+          .map(toThreadMessage);
+      },
+      'El mensaje no existe',
+    );
   }
 
   /**
@@ -369,6 +373,7 @@ export class MessagesService {
       subject: dto.subject,
       snippet: toSnippet(htmlToPlainText(html)),
       sentAt: new Date().toISOString(),
+      hasAttachments: attachments.length > 0,
     };
   }
 
@@ -403,6 +408,7 @@ export class MessagesService {
       subject: reply.subject,
       snippet: toSnippet(htmlToPlainText(html)),
       sentAt: new Date().toISOString(),
+      hasAttachments: attachments.length > 0,
     };
   }
 

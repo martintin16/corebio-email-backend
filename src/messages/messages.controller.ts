@@ -80,12 +80,7 @@ export class MessagesController {
     if (labelId !== undefined && !USER_LABEL_ID.test(labelId)) {
       throw new BadRequestException('labelId inválido');
     }
-    return this.messages.listInbox(
-      mailboxId,
-      labelId,
-      checkPageToken(pageToken),
-      checkQuery(q),
-    );
+    return this.messages.listInbox(mailboxId, labelId, checkPageToken(pageToken), checkQuery(q));
   }
 
   // --- Etiquetas -----------------------------------------------------------------
