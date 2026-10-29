@@ -53,6 +53,7 @@ import type {
   MessageSummary,
   SentMessageDetail,
   SentMessageSummary,
+  ThreadMessage,
 } from './messages.types';
 
 type GmailMessage = gmail_v1.Schema$Message;
@@ -142,6 +143,7 @@ export class MessagesService {
     mailboxId: string,
     labelId?: string,
     pageToken?: string,
+    q?: string,
   ): Promise<MessagePage<MessageSummary>> {
     const apis = await this.google.forMailbox(mailboxId);
     const page = await this.listByLabel(
@@ -149,6 +151,7 @@ export class MessagesService {
       labelId ?? 'INBOX',
       ['From', 'Subject', 'Date'],
       pageToken,
+      q,
     );
     return { items: page.messages.map(toMessageSummary), nextPageToken: page.nextPageToken };
   }
@@ -256,9 +259,13 @@ export class MessagesService {
   // Enviados
   // ---------------------------------------------------------------------------
 
-  async listSent(mailboxId: string, pageToken?: string): Promise<MessagePage<SentMessageSummary>> {
+  async listSent(
+    mailboxId: string,
+    pageToken?: string,
+    q?: string,
+  ): Promise<MessagePage<SentMessageSummary>> {
     const apis = await this.google.forMailbox(mailboxId);
-    const page = await this.listByLabel(apis, 'SENT', ['To', 'Subject', 'Date'], pageToken);
+    const page = await this.listByLabel(apis, 'SENT', ['To', 'Subject', 'Date'], pageToken, q);
     return { items: page.messages.map(toSentSummary), nextPageToken: page.nextPageToken };
   }
 
@@ -267,6 +274,36 @@ export class MessagesService {
     const message = await this.getFull(apis, sentId);
     if (!hasLabel(message, 'SENT')) throw new NotFoundException('El mensaje no existe');
     return toSentDetail(message, mailboxId);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Conversación
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Los mensajes de la conversación de `messageId`, del más viejo al más
+   * nuevo (incluido él mismo). Sin borradores ni los que están en la Papelera.
+   * Sirve para recibidos y enviados: Gmail agrupa los dos en el mismo hilo.
+   */
+  async getThread(mailboxId: string, messageId: string): Promise<ThreadMessage[]> {
+    const apis = await this.google.forMailbox(mailboxId);
+    return this.call(apis.mailboxId, async () => {
+      const { data: message } = await apis.gmail.users.messages.get({
+        userId: 'me',
+        id: messageId,
+        format: 'minimal',
+      });
+      if (!message.threadId) return [];
+      const { data: thread } = await apis.gmail.users.threads.get({
+        userId: 'me',
+        id: message.threadId,
+        format: 'full',
+      });
+      return (thread.messages ?? [])
+        .filter((m) => !hasLabel(m, 'DRAFT') && (!isTrashed(m) || m.id === messageId))
+        .sort((a, b) => Number(a.internalDate ?? 0) - Number(b.internalDate ?? 0))
+        .map(toThreadMessage);
+    }, 'El mensaje no existe');
   }
 
   /**
@@ -618,12 +655,17 @@ export class MessagesService {
 
   // ---------------------------------------------------------------------------
 
-  /** Una página de LIST_LIMIT mensajes de la etiqueta; con `pageToken`, la siguiente. */
+  /**
+   * Una página de LIST_LIMIT mensajes de la etiqueta; con `pageToken`, la
+   * siguiente. `q` es la búsqueda de Gmail (la misma de gmail.com: texto
+   * libre, `from:`, `has:attachment`…), combinada con la etiqueta.
+   */
   private listByLabel(
     apis: MailboxGoogleApis,
     label: string,
     headers: string[],
     pageToken?: string,
+    q?: string,
   ): Promise<{ messages: GmailMessage[]; nextPageToken: string | null }> {
     return this.call(apis.mailboxId, async () => {
       const { data } = await apis.gmail.users.messages.list({
@@ -631,6 +673,7 @@ export class MessagesService {
         labelIds: [label],
         maxResults: LIST_LIMIT,
         ...(pageToken ? { pageToken } : {}),
+        ...(q ? { q } : {}),
       });
       const ids = (data.messages ?? []).map((m) => m.id).filter((id): id is string => !!id);
       const messages = await mapWithConcurrency(ids, GMAIL_CONCURRENCY, async (id) => {
@@ -772,7 +815,22 @@ export function toMessageSummary(message: GmailMessage): MessageSummary {
     receivedAt: messageDateIso(message),
     unread: hasLabel(message, 'UNREAD'),
     labelIds: userLabelIds(message),
+    hasAttachments: hasAttachments(message),
   };
+}
+
+/**
+ * ¿Trae adjuntos? Con el formato `metadata` (el de las listas) Gmail no manda
+ * las partes del mensaje, pero sí su tipo: un mail con adjuntos es
+ * `multipart/mixed`. Las imágenes pegadas en el texto van como
+ * `multipart/related` y no cuentan. Un mail que es directamente un archivo
+ * (sin texto) tampoco es `text/*` ni `multipart/*`.
+ */
+export function hasAttachments(message: GmailMessage): boolean {
+  const type = (message.payload?.mimeType ?? '').toLowerCase();
+  if (!type) return false;
+  if (type === 'multipart/mixed') return true;
+  return !type.startsWith('text/') && !type.startsWith('multipart/');
 }
 
 /** El cuerpo va en texto plano: el frontend lo muestra como texto. */
@@ -794,6 +852,23 @@ export function toSentSummary(message: GmailMessage): SentMessageSummary {
     subject: subjectOf(message),
     snippet: decodeEntities(message.snippet ?? ''),
     sentAt: messageDateIso(message),
+    hasAttachments: hasAttachments(message),
+  };
+}
+
+/** Un mensaje de un hilo, con el cuerpo en texto plano (como el detalle de un recibido). */
+export function toThreadMessage(message: GmailMessage): ThreadMessage {
+  const { html, text } = extractBodies(message.payload ?? undefined);
+  return {
+    id: message.id ?? '',
+    from: parseAddress(getHeader(message, 'From')),
+    to: getHeader(message, 'To'),
+    cc: getHeader(message, 'Cc'),
+    date: messageDateIso(message),
+    snippet: decodeEntities(message.snippet ?? ''),
+    body: text?.trim() || (html ? htmlToPlainText(sanitizeEmailHtml(html)) : ''),
+    attachments: toAttachmentInfos(message),
+    sent: hasLabel(message, 'SENT'),
   };
 }
 

@@ -11,4 +11,6 @@ export interface MailboxSyncState {
   historyId: string;
   /** Cambia al crear, editar, cancelar, enviar o fallar un programado de la casilla. */
   scheduledVersion: string;
+  /** No leídos de Recibidos (para "(3) Corebio Mail" en la pestaña del navegador). */
+  inboxUnread: number;
 }

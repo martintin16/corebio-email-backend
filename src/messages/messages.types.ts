@@ -25,6 +25,8 @@ export interface MessageSummary {
   unread: boolean;
   /** Etiquetas de usuario de Gmail aplicadas (ver MailLabel). */
   labelIds: string[];
+  /** Si trae adjuntos (para el clip de la lista). Se deduce sin pedidos extra; ver hasAttachments. */
+  hasAttachments: boolean;
 }
 
 /** Una etiqueta de Gmail creada por el usuario — `MailLabel` del frontend. */
@@ -50,6 +52,7 @@ export interface SentMessageSummary {
   subject: string;
   snippet: string;
   sentAt: string; // ISO
+  hasAttachments: boolean;
 }
 
 export interface SentMessageDetail extends SentMessageSummary {
@@ -77,4 +80,22 @@ export interface DownloadedAttachment {
 export interface MessagePage<T> {
   items: T[];
   nextPageToken: string | null;
+}
+
+/**
+ * Un mensaje de la conversación (`GET /mailboxes/:id/messages/:messageId/thread`).
+ * El cuerpo va en texto plano, como el detalle de un recibido: en un hilo hay
+ * mensajes de terceros.
+ */
+export interface ThreadMessage {
+  id: string;
+  from: { name: string; email: string };
+  to: string;
+  cc: string;
+  date: string; // ISO
+  snippet: string;
+  body: string;
+  attachments: AttachmentInfo[];
+  /** Mandado desde la casilla (etiqueta SENT de Gmail). */
+  sent: boolean;
 }

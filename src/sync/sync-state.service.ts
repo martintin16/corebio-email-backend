@@ -21,18 +21,28 @@ export class SyncStateService {
   ) {}
 
   async getState(mailboxId: string): Promise<MailboxSyncState> {
-    const [historyId, scheduledVersion] = await Promise.all([
-      this.gmailHistoryId(mailboxId),
+    const [gmail, scheduledVersion] = await Promise.all([
+      this.gmailState(mailboxId),
       this.scheduledVersion(mailboxId),
     ]);
-    return { historyId, scheduledVersion };
+    return { ...gmail, scheduledVersion };
   }
 
-  private async gmailHistoryId(mailboxId: string): Promise<string> {
+  /**
+   * historyId (`users.getProfile`) y no leídos de Recibidos (`labels.get`
+   * de INBOX, que trae el conteo). 1 unidad de cuota cada uno.
+   */
+  private async gmailState(mailboxId: string): Promise<{ historyId: string; inboxUnread: number }> {
     const apis = await this.google.forMailbox(mailboxId);
     try {
-      const { data } = await apis.gmail.users.getProfile({ userId: 'me' });
-      return data.historyId ?? '';
+      const [profile, inbox] = await Promise.all([
+        apis.gmail.users.getProfile({ userId: 'me' }),
+        apis.gmail.users.labels.get({ userId: 'me', id: 'INBOX' }),
+      ]);
+      return {
+        historyId: profile.data.historyId ?? '',
+        inboxUnread: inbox.data.messagesUnread ?? 0,
+      };
     } catch (err) {
       return this.google.handleGoogleError(mailboxId, err);
     }

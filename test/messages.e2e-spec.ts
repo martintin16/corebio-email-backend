@@ -44,6 +44,7 @@ describe('Messages (e2e)', () => {
     send: jest.fn(),
     reply: jest.fn(),
     listSent: jest.fn(),
+    getThread: jest.fn(),
     getSentMessage: jest.fn(),
     findSentForUser: jest.fn(),
     getAttachment: jest.fn(),
@@ -133,12 +134,44 @@ describe('Messages (e2e)', () => {
         .get(`/mailboxes/${MBX}/messages?pageToken=12345&labelId=Label_7`)
         .set('Authorization', await asUser())
         .expect(200, { items: [], nextPageToken: '42' });
-      expect(messages.listInbox).toHaveBeenCalledWith(MBX, 'Label_7', '12345');
+      expect(messages.listInbox).toHaveBeenCalledWith(MBX, 'Label_7', '12345', undefined);
       await http()
         .get(`/mailboxes/${MBX}/sent?pageToken=678`)
         .set('Authorization', await asUser())
         .expect(200, { items: [], nextPageToken: null });
-      expect(messages.listSent).toHaveBeenCalledWith(MBX, '678');
+      expect(messages.listSent).toHaveBeenCalledWith(MBX, '678', undefined);
+    });
+
+    it('?q= llega recortada; vacía = sin búsqueda; muy larga → 400', async () => {
+      messages.listInbox.mockResolvedValue({ items: [], nextPageToken: null });
+      messages.listSent.mockResolvedValue({ items: [], nextPageToken: null });
+      await http()
+        .get(`/mailboxes/${MBX}/messages?q=${encodeURIComponent('  from:banco  ')}`)
+        .set('Authorization', await asUser())
+        .expect(200);
+      expect(messages.listInbox).toHaveBeenLastCalledWith(MBX, undefined, undefined, 'from:banco');
+      await http()
+        .get(`/mailboxes/${MBX}/sent?q=`)
+        .set('Authorization', await asUser())
+        .expect(200);
+      expect(messages.listSent).toHaveBeenLastCalledWith(MBX, undefined, undefined);
+      await http()
+        .get(`/mailboxes/${MBX}/messages?q=${'a'.repeat(201)}`)
+        .set('Authorization', await asUser())
+        .expect(400);
+    });
+
+    it('GET thread devuelve la conversación del mensaje (canRead)', async () => {
+      messages.getThread.mockResolvedValue([{ id: MSG }]);
+      await http()
+        .get(`/mailboxes/${MBX}/messages/${MSG}/thread`)
+        .set('Authorization', await t.authHeader(ADMIN_ID))
+        .expect(200, [{ id: MSG }]);
+      expect(messages.getThread).toHaveBeenCalledWith(MBX, MSG);
+      await http()
+        .get(`/mailboxes/${OTHER}/messages/${MSG}/thread`)
+        .set('Authorization', await asUser())
+        .expect(403);
     });
 
     it('pageToken con caracteres raros → 400', async () => {
@@ -417,7 +450,7 @@ describe('Messages (e2e)', () => {
         .get(`/mailboxes/${MBX}/messages?labelId=Label_7`)
         .set('Authorization', await asUser())
         .expect(200);
-      expect(messages.listInbox).toHaveBeenCalledWith(MBX, 'Label_7', undefined);
+      expect(messages.listInbox).toHaveBeenCalledWith(MBX, 'Label_7', undefined, undefined);
       await http()
         .get(`/mailboxes/${MBX}/messages?labelId=TRASH`)
         .set('Authorization', await asUser())

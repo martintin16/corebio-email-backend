@@ -28,6 +28,7 @@ import type {
   MessageSummary,
   SentMessageDetail,
   SentMessageSummary,
+  ThreadMessage,
 } from './messages.types';
 import {
   PAGE_TOKEN,
@@ -35,6 +36,18 @@ import {
   ParseGmailIdPipe,
   USER_LABEL_ID,
 } from './pipes/parse-gmail-id.pipe';
+
+/** Máximo de la búsqueda (`?q=`). */
+const MAX_QUERY_LENGTH = 200;
+
+/** `?q=` opcional: la búsqueda de Gmail. Vacía = sin búsqueda. */
+function checkQuery(q: unknown): string | undefined {
+  if (q === undefined) return undefined;
+  if (typeof q !== 'string' || q.length > MAX_QUERY_LENGTH) {
+    throw new BadRequestException(`q: máximo ${MAX_QUERY_LENGTH} caracteres`);
+  }
+  return q.trim() || undefined;
+}
 
 /** `?pageToken=` opcional: el `nextPageToken` de la página anterior. */
 function checkPageToken(pageToken: unknown): string | undefined {
@@ -53,7 +66,8 @@ export class MessagesController {
 
   /**
    * Una página de Recibidos (25). `?labelId=Label_…` → los de esa etiqueta
-   * (también archivados). `?pageToken=` → la página siguiente.
+   * (también archivados). `?q=` → búsqueda de Gmail. `?pageToken=` → la
+   * página siguiente (con los mismos labelId y q).
    */
   @RequireMailboxAccess('read')
   @Get('messages')
@@ -61,11 +75,17 @@ export class MessagesController {
     @Param('mailboxId', ParseUUIDPipe) mailboxId: string,
     @Query('labelId') labelId?: string,
     @Query('pageToken') pageToken?: string,
+    @Query('q') q?: string,
   ): Promise<MessagePage<MessageSummary>> {
     if (labelId !== undefined && !USER_LABEL_ID.test(labelId)) {
       throw new BadRequestException('labelId inválido');
     }
-    return this.messages.listInbox(mailboxId, labelId, checkPageToken(pageToken));
+    return this.messages.listInbox(
+      mailboxId,
+      labelId,
+      checkPageToken(pageToken),
+      checkQuery(q),
+    );
   }
 
   // --- Etiquetas -----------------------------------------------------------------
@@ -94,6 +114,16 @@ export class MessagesController {
     @Param('messageId', ParseGmailIdPipe) messageId: string,
   ): Promise<MessageDetail> {
     return this.messages.getInboxMessage(mailboxId, messageId);
+  }
+
+  /** La conversación del mensaje (recibido o enviado), del más viejo al más nuevo. */
+  @RequireMailboxAccess('read')
+  @Get('messages/:messageId/thread')
+  getThread(
+    @Param('mailboxId', ParseUUIDPipe) mailboxId: string,
+    @Param('messageId', ParseGmailIdPipe) messageId: string,
+  ): Promise<ThreadMessage[]> {
+    return this.messages.getThread(mailboxId, messageId);
   }
 
   /** Descarga de un adjunto. Sirve para recibidos y enviados (mismos ids de Gmail). */
@@ -136,13 +166,14 @@ export class MessagesController {
   // --- Enviados ----------------------------------------------------------------
 
   @RequireMailboxAccess('read')
-  /** Una página de Enviados (25); `?pageToken=` → la siguiente. */
+  /** Una página de Enviados (25); `?q=` → búsqueda; `?pageToken=` → la siguiente. */
   @Get('sent')
   listSent(
     @Param('mailboxId', ParseUUIDPipe) mailboxId: string,
     @Query('pageToken') pageToken?: string,
+    @Query('q') q?: string,
   ): Promise<MessagePage<SentMessageSummary>> {
-    return this.messages.listSent(mailboxId, checkPageToken(pageToken));
+    return this.messages.listSent(mailboxId, checkPageToken(pageToken), checkQuery(q));
   }
 
   @RequireMailboxAccess('read')

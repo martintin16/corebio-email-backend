@@ -7,8 +7,11 @@ const MBX = '11111111-1111-4111-8111-111111111111';
 
 describe('SyncStateService', () => {
   const getProfile = jest.fn();
+  const getLabel = jest.fn();
   const google = {
-    forMailbox: jest.fn(() => Promise.resolve({ gmail: { users: { getProfile } } })),
+    forMailbox: jest.fn(() =>
+      Promise.resolve({ gmail: { users: { getProfile, labels: { get: getLabel } } } }),
+    ),
     handleGoogleError: jest.fn(() => Promise.reject(new BadGatewayException('Google falló'))),
   };
   const dataSource = { query: jest.fn() };
@@ -20,6 +23,7 @@ describe('SyncStateService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     getProfile.mockResolvedValue({ data: { historyId: '98765' } });
+    getLabel.mockResolvedValue({ data: { id: 'INBOX', messagesUnread: 3 } });
     dataSource.query.mockResolvedValue([{ total: '2', last: '1700000000000' }]);
   });
 
@@ -27,7 +31,9 @@ describe('SyncStateService', () => {
     await expect(service.getState(MBX)).resolves.toEqual({
       historyId: '98765',
       scheduledVersion: '2:1700000000000',
+      inboxUnread: 3,
     });
+    expect(getLabel).toHaveBeenCalledWith({ userId: 'me', id: 'INBOX' });
     expect(google.forMailbox).toHaveBeenCalledWith(MBX);
     expect(getProfile).toHaveBeenCalledWith({ userId: 'me' });
     expect(dataSource.query).toHaveBeenCalledWith(expect.stringContaining('scheduled_messages'), [

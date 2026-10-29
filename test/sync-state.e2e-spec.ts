@@ -39,7 +39,11 @@ describe('Sync state (e2e)', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    sync.getState.mockResolvedValue({ historyId: '123', scheduledVersion: '1:1700000000000' });
+    sync.getState.mockResolvedValue({
+      historyId: '123',
+      scheduledVersion: '1:1700000000000',
+      inboxUnread: 2,
+    });
   });
 
   const http = () => request(t.app.getHttpServer());
@@ -48,7 +52,7 @@ describe('Sync state (e2e)', () => {
     await http()
       .get(`/mailboxes/${MBX}/sync-state`)
       .set('Authorization', await t.authHeader(USER_ID))
-      .expect(200, { historyId: '123', scheduledVersion: '1:1700000000000' });
+      .expect(200, { historyId: '123', scheduledVersion: '1:1700000000000', inboxUnread: 2 });
     expect(sync.getState).toHaveBeenCalledWith(MBX);
   });
 

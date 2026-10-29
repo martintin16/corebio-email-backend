@@ -182,15 +182,16 @@ Códigos de respuesta:
 | `POST /mailboxes/:id/reconnect` | admin | 3 | Primera conexión o reconexión con Google → `{ authUrl }` (llevar el navegador ahí) |
 | `GET /mailboxes/oauth/callback` | público | 3 | Vuelta de Google. Redirige a `<FRONTEND_URL>/admin/mailboxes?connected=<id>` o `?connectionError=<code>` |
 | `GET /me/mailboxes` | logueado | 1·6 | `Mailbox[]` a las que el usuario tiene algún permiso, con `canRead` y `canSend` |
-| `GET /mailboxes/:id/messages` | `canRead` | 4·8·10 | Una página (25) de Recibidos → `{ items: MessageSummary[], nextPageToken }` (con `labelIds`). `?labelId=Label_…` → los de esa etiqueta. `?pageToken=` → la página siguiente |
-| `GET /mailboxes/:id/sync-state` | `canRead` | 9 | `{ historyId, scheduledVersion }`: si cambia alguno, hay novedades (mails o programados) y el front vuelve a pedir las listas |
+| `GET /mailboxes/:id/messages` | `canRead` | 4·8·10 | Una página (25) de Recibidos → `{ items: MessageSummary[], nextPageToken }` (con `labelIds`). `?labelId=Label_…` → los de esa etiqueta. `?q=` → búsqueda de Gmail. `?pageToken=` → la página siguiente. Cada resumen trae `hasAttachments` |
+| `GET /mailboxes/:id/sync-state` | `canRead` | 9 | `{ historyId, scheduledVersion, inboxUnread }`: si cambia alguno, hay novedades (mails o programados) y el front vuelve a pedir las listas |
 | `GET /mailboxes/:id/labels` | `canRead` | 8 | Etiquetas de usuario de la casilla → `MailLabel[]` (`{ id, name, color }`) |
 | `PATCH /mailboxes/:id/messages/:messageId/labels` | `canRead` | 8 | `{ add?, remove? }` (ids de etiqueta) → aplica a la conversación → `{ labelIds }` |
 | `GET /mailboxes/:id/messages/:messageId` | `canRead` | 4·8 | `MessageDetail` (cuerpo en texto plano, `cc`, `attachments`); lo marca como leído |
+| `GET /mailboxes/:id/messages/:messageId/thread` | `canRead` | 11 | La conversación del mensaje (recibido o enviado) → `ThreadMessage[]`, del más viejo al más nuevo, sin borradores ni Papelera |
 | `GET /mailboxes/:id/messages/:messageId/attachments/:attachmentId` | `canRead` | 4.5 | Descarga un adjunto (recibidos y enviados) |
 | `POST /mailboxes/:id/messages` | `canSend` | 4·4.5·8 | Redactar: `{ to, cc?, bcc?, subject, body, forwardedAttachments? }` (destinatarios: emails separados por coma) + adjuntos (`attachments`, multipart). Reenviar adjuntos pide además `canRead`. Cupo diario → 429 `RECIPIENT_LIMIT_EXCEEDED` |
 | `POST /mailboxes/:id/messages/:messageId/reply` | `canSend` | 4 | Responder en el mismo hilo: `{ body }` + adjuntos |
-| `GET /mailboxes/:id/sent` | `canRead` | 4·10 | Una página (25) de Enviados → `{ items: SentMessageSummary[], nextPageToken }`. `?pageToken=` → la siguiente |
+| `GET /mailboxes/:id/sent` | `canRead` | 4·10 | Una página (25) de Enviados → `{ items: SentMessageSummary[], nextPageToken }`. `?q=` → búsqueda. `?pageToken=` → la siguiente |
 | `GET /mailboxes/:id/sent/:sentId` | `canRead` | 4·8 | `SentMessageDetail` (cuerpo en HTML sanitizado, `cc`, `bcc`, `attachments`) |
 | `GET /sent/:sentId` | `canRead` en la casilla | 4 | Para "Reenviar": busca el enviado en las casillas que la persona puede leer |
 | `GET /mailboxes/:id/scheduled-messages` | `canRead` | 5 | Programados de la casilla (pendientes, enviándose y con error) → `ScheduledMessage[]` |
@@ -1047,6 +1048,26 @@ La primera prueba del front conectado encontró dos fallos con los nombres de lo
 - ✅ `typecheck`, `test` (439), `test:e2e` (182), `build`; `lint` con un error de formato en un test, ya
   corregido. Desde la app y directo al backend: más de 1.000.000 de caracteres y el campo de más dan 400
   en castellano.
+
+### Fase 11 — Buscar, conversación y no leídos
+
+**Qué se construyó**
+- **Búsqueda**: `?q=` en Recibidos (también con `?labelId=`) y en Enviados. Es la búsqueda de Gmail
+  (`users.messages.list` con `q`): texto libre y operadores (`from:`, `has:attachment`, `after:`).
+  Pagina igual que la lista normal. Vacía = sin búsqueda; más de 200 caracteres → 400.
+- **Clip**: `hasAttachments` en los resúmenes de Recibidos y Enviados. Sale del tipo del mensaje que
+  Gmail ya manda en la lista (`multipart/mixed` = con adjuntos; las imágenes pegadas en el texto van
+  como `multipart/related` y no cuentan): sin pedidos extra.
+- **Conversación**: `GET /mailboxes/:id/messages/:messageId/thread` (`canRead`) → los mensajes del hilo
+  (`threads.get`), ordenados por fecha, sin borradores ni los de la Papelera (salvo el pedido). Cada uno
+  con cuerpo en texto plano (en un hilo hay mensajes de terceros), adjuntos y `sent`.
+- **No leídos**: `sync-state` suma `inboxUnread` (`labels.get` de INBOX trae el conteo; 1 unidad de
+  cuota), para "(3) Corebio Mail" en la pestaña.
+
+**Verificación**
+- Tests: unit (q, `hasAttachments`, hilo ordenado y filtrado, 404, `inboxUnread`) y e2e (`?q=`, hilo
+  con canRead y 403 sin acceso, `inboxUnread`).
+- ⏳ `lint`, `typecheck`, `test`, `test:e2e`, `build`.
 
 ### ⏳ Pendiente
 

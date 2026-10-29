@@ -11,7 +11,13 @@ import {
   type GoogleMailboxClient,
 } from '../google/google-mailbox-client';
 import type { MailboxAccessService } from '../mailboxes/mailbox-access.service';
-import { DRAFT_NOT_FOUND, isGmailNotFound, LIST_LIMIT, MessagesService } from './messages.service';
+import {
+  DRAFT_NOT_FOUND,
+  hasAttachments,
+  isGmailNotFound,
+  LIST_LIMIT,
+  MessagesService,
+} from './messages.service';
 import { RecipientLimitExceededException, type SendQuotaService } from './send-quota.service';
 
 const MBX = '11111111-1111-4111-8111-111111111111';
@@ -73,7 +79,7 @@ describe('MessagesService', () => {
         attachments: { get: jest.Mock };
       };
       labels: { list: jest.Mock };
-      threads: { modify: jest.Mock };
+      threads: { modify: jest.Mock; get: jest.Mock };
       drafts: {
         create: jest.Mock;
         update: jest.Mock;
@@ -116,7 +122,10 @@ describe('MessagesService', () => {
             },
           }),
         },
-        threads: { modify: jest.fn().mockResolvedValue({ data: {} }) },
+        threads: {
+          modify: jest.fn().mockResolvedValue({ data: {} }),
+          get: jest.fn().mockResolvedValue({ data: { messages: [] } }),
+        },
         drafts: {
           create: jest.fn().mockResolvedValue({ data: { id: 'r-draft1' } }),
           update: jest.fn().mockResolvedValue({ data: { id: 'r-draft1' } }),
@@ -173,7 +182,29 @@ describe('MessagesService', () => {
         receivedAt: '2023-11-14T22:13:20.000Z',
         unread: true,
         labelIds: [],
+        hasAttachments: false,
       });
+    });
+
+    it('con q busca con la búsqueda de Gmail, junto con la etiqueta', async () => {
+      await service.listInbox(MBX, undefined, undefined, 'from:banco');
+      expect(gmail.users.messages.list).toHaveBeenCalledWith({
+        userId: 'me',
+        labelIds: ['INBOX'],
+        maxResults: LIST_LIMIT,
+        q: 'from:banco',
+      });
+    });
+
+    it('marca el clip según el tipo del mensaje (multipart/mixed = con adjuntos)', async () => {
+      gmail.users.messages.get.mockResolvedValue({
+        data: {
+          ...inboxMessage,
+          payload: { ...inboxMessage.payload, mimeType: 'multipart/mixed' },
+        },
+      });
+      const [summary] = (await service.listInbox(MBX)).items;
+      expect(summary.hasAttachments).toBe(true);
     });
 
     it('pide la página siguiente con pageToken y devuelve el nextPageToken de Gmail', async () => {
@@ -237,6 +268,55 @@ describe('MessagesService', () => {
       gmail.users.messages.list.mockRejectedValue(err);
       await expect(service.listInbox(MBX)).rejects.toBeInstanceOf(BadGatewayException);
       expect(google.handleGoogleError).toHaveBeenCalledWith(MBX, err);
+    });
+  });
+
+  describe('Conversación', () => {
+    const msg = (id: string, date: string, labels: string[], from: string) => ({
+      ...inboxMessage,
+      id,
+      internalDate: date,
+      labelIds: labels,
+      payload: {
+        ...inboxMessage.payload,
+        headers: headers({ From: from, To: 'casilla@gmail.com', Subject: 'Hola' }),
+      },
+    });
+
+    it('trae el hilo del mensaje, ordenado, sin borradores ni Papelera', async () => {
+      gmail.users.messages.get.mockResolvedValue({
+        data: { id: 'msg00002', threadId: 'thr00001' },
+      });
+      gmail.users.threads.get.mockResolvedValue({
+        data: {
+          messages: [
+            msg('msg00003', '3000', ['SENT'], 'Casilla <casilla@gmail.com>'),
+            msg('msg00001', '1000', ['INBOX'], 'Ana <ana@x.com>'),
+            msg('draft001', '4000', ['DRAFT'], 'Casilla <casilla@gmail.com>'),
+            msg('trash001', '2500', ['TRASH'], 'Beto <beto@x.com>'),
+            msg('msg00002', '2000', ['INBOX'], 'Ana <ana@x.com>'),
+          ],
+        },
+      });
+      const thread = await service.getThread(MBX, 'msg00002');
+      expect(gmail.users.messages.get).toHaveBeenCalledWith({
+        userId: 'me',
+        id: 'msg00002',
+        format: 'minimal',
+      });
+      expect(gmail.users.threads.get).toHaveBeenCalledWith({
+        userId: 'me',
+        id: 'thr00001',
+        format: 'full',
+      });
+      expect(thread.map((m) => m.id)).toEqual(['msg00001', 'msg00002', 'msg00003']);
+      expect(thread[2]).toMatchObject({ sent: true, from: { email: 'casilla@gmail.com' } });
+      expect(thread[0]).toMatchObject({ sent: false, body: 'Hola texto', to: 'casilla@gmail.com' });
+    });
+
+    it('un id que Gmail no encuentra → 404', async () => {
+      gmail.users.messages.get.mockRejectedValue({ status: 404 });
+      await expect(service.getThread(MBX, 'msg00009')).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 
@@ -794,5 +874,18 @@ describe('MessagesService', () => {
         NotFoundException,
       );
     });
+  });
+});
+
+describe('hasAttachments', () => {
+  it.each([
+    ['multipart/mixed', true],
+    ['multipart/alternative', false],
+    ['multipart/related', false],
+    ['text/plain', false],
+    ['application/pdf', true],
+    ['', false],
+  ])('%s → %p', (mimeType, expected) => {
+    expect(hasAttachments({ payload: { mimeType } })).toBe(expected);
   });
 });
