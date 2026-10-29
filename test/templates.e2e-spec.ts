@@ -100,6 +100,30 @@ describe('Templates (e2e)', () => {
         .expect(201);
     });
 
+    it('cuerpo de más de 1.000.000 de caracteres → 400 en castellano', async () => {
+      const body = `<p>${'a'.repeat(1_000_001)}</p>`;
+      const res = await http()
+        .post(base)
+        .set('Authorization', await asUser())
+        .send({ name: 'Larguísima', body })
+        .expect(400);
+      expect((res.body as { message: string[] }).message).toContain(
+        'El texto es demasiado largo (máximo 1.000.000 de caracteres)',
+      );
+      expect(templates.create).not.toHaveBeenCalled();
+    });
+
+    it('un campo de más → 400 en castellano', async () => {
+      const res = await http()
+        .post(base)
+        .set('Authorization', await asUser())
+        .send({ name: 'X', body: '<p>Hola</p>', foo: 1 })
+        .expect(400);
+      expect((res.body as { message: string[] }).message).toEqual([
+        'foo no es un campo permitido',
+      ]);
+    });
+
     it('más de 2 MB → 413 en castellano', async () => {
       const body = `<p>${'a'.repeat(2_200_000)}</p>`;
       const res = await http()

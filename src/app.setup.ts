@@ -1,6 +1,7 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import type { NextFunction, Request, Response } from 'express';
+import { validationExceptionFactory } from './common/validation-messages';
 
 /**
  * Tamaño máximo de un pedido JSON (plantillas, permisos, etc.). El de Express
@@ -36,6 +37,8 @@ export function configureApp(app: INestApplication): void {
       whitelist: true,
       forbidNonWhitelisted: true,
       transform: true,
+      // Mismo formato de error, con el "campo de más" en castellano.
+      exceptionFactory: validationExceptionFactory,
     }),
   );
 }

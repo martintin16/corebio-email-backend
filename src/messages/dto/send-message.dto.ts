@@ -14,6 +14,7 @@ import { MAX_ATTACHMENTS } from '../attachments';
 import { ForwardedAttachmentDto } from './forwarded-attachment.dto';
 import { HasVisibleText } from './has-visible-text.validator';
 import { HasAnyRecipient, IsRecipientList } from './recipient-list.validator';
+import { BODY_TOO_LONG, notText, tooLong, tooMany } from '../../common/validation-messages';
 
 /** Máximo de HTML aceptado en el cuerpo (los adjuntos van aparte). */
 export const MAX_BODY_LENGTH = 1_000_000;
@@ -26,7 +27,7 @@ export const MAX_BODY_LENGTH = 1_000_000;
 export class SendMessageDto {
   /** Opcional: si viene, tiene que coincidir con el `:mailboxId` de la ruta. */
   @IsOptional()
-  @IsUUID()
+  @IsUUID(undefined, { message: 'mailboxId inválido' })
   mailboxId?: string;
 
   /**
@@ -51,13 +52,13 @@ export class SendMessageDto {
   bcc?: string;
 
   @Transform(trimString)
-  @IsString()
+  @IsString({ message: notText('subject') })
   @IsNotEmpty({ message: 'subject no puede estar vacío' })
-  @MaxLength(500)
+  @MaxLength(500, { message: tooLong('subject', 500) })
   subject: string;
 
-  @IsString()
-  @MaxLength(MAX_BODY_LENGTH)
+  @IsString({ message: notText('body') })
+  @MaxLength(MAX_BODY_LENGTH, { message: BODY_TOO_LONG })
   @HasVisibleText()
   body: string;
 
@@ -69,7 +70,7 @@ export class SendMessageDto {
   @IsOptional()
   @Transform(toArrayField(ForwardedAttachmentDto))
   @IsArray({ message: 'forwardedAttachments tiene que ser una lista' })
-  @ArrayMaxSize(MAX_ATTACHMENTS)
+  @ArrayMaxSize(MAX_ATTACHMENTS, { message: tooMany('forwardedAttachments', MAX_ATTACHMENTS) })
   @ValidateNested({ each: true })
   forwardedAttachments?: ForwardedAttachmentDto[];
 }

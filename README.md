@@ -1032,6 +1032,20 @@ La primera prueba del front conectado encontró dos fallos con los nombres de lo
 - ✅ `lint` (sin errores), `typecheck`, `test` (435), `test:e2e` (180), `build`. Desde la app, una
   plantilla de 300 KB se guarda.
 
+### 🔧 Ajuste — Mensajes de validación en castellano
+
+- Todos los decoradores de class-validator de los DTOs llevan su mensaje en castellano
+  (`src/common/validation-messages.ts`: `notText`, `tooLong`, `tooMany`, `BODY_TOO_LONG`). Antes, 42 salían
+  en inglés si el front no los frenaba ("body must be shorter than or equal to 1000000 characters").
+- El cuerpo de mails, respuestas, programados y plantillas sigue con máximo **1.000.000 de caracteres**
+  ("El texto es demasiado largo (máximo 1.000.000 de caracteres)"). Los 2 MB del pedido son margen para
+  tildes, HTML y el resto del pedido: el límite que se ve es uno solo.
+- El "campo de más" (`forbidNonWhitelisted`) también sale en castellano: "foo no es un campo permitido"
+  (`validationExceptionFactory` en el ValidationPipe global).
+- Tests: unit de los mensajes y e2e de plantillas (cuerpo de más de 1.000.000 de caracteres y campo de
+  más → 400 en castellano).
+- ⏳ `lint`, `typecheck`, `test`, `test:e2e`, `build`.
+
 ### ⏳ Pendiente
 
 - **Mini-fase front↔back**: conectar el frontend al backend (los cambios de contrato están en

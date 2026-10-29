@@ -19,6 +19,7 @@ import { HasVisibleText } from '../../messages/dto/has-visible-text.validator';
 import { HasAnyRecipient, IsRecipientList } from '../../messages/dto/recipient-list.validator';
 import { MAX_BODY_LENGTH } from '../../messages/dto/send-message.dto';
 import { GMAIL_ID } from '../../messages/pipes/parse-gmail-id.pipe';
+import { BODY_TOO_LONG, notText, tooLong, tooMany } from '../../common/validation-messages';
 
 /**
  * Body de POST /scheduled-messages — `ScheduleMessageInput` del frontend
@@ -55,13 +56,13 @@ export class CreateScheduledMessageDto {
 
   @ValidateIf((o: CreateScheduledMessageDto) => !o.replyToMessageId || o.subject !== undefined)
   @Transform(trimString)
-  @IsString()
+  @IsString({ message: notText('subject') })
   @IsNotEmpty({ message: 'subject no puede estar vacío' })
-  @MaxLength(500)
+  @MaxLength(500, { message: tooLong('subject', 500) })
   subject?: string;
 
-  @IsString()
-  @MaxLength(MAX_BODY_LENGTH)
+  @IsString({ message: notText('body') })
+  @MaxLength(MAX_BODY_LENGTH, { message: BODY_TOO_LONG })
   @HasVisibleText()
   body: string;
 
@@ -77,7 +78,7 @@ export class CreateScheduledMessageDto {
   @IsOptional()
   @Transform(toArrayField(ForwardedAttachmentDto))
   @IsArray({ message: 'forwardedAttachments tiene que ser una lista' })
-  @ArrayMaxSize(MAX_ATTACHMENTS)
+  @ArrayMaxSize(MAX_ATTACHMENTS, { message: tooMany('forwardedAttachments', MAX_ATTACHMENTS) })
   @ValidateNested({ each: true })
   forwardedAttachments?: ForwardedAttachmentDto[];
 }

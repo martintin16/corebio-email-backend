@@ -18,6 +18,7 @@ import { HasVisibleText } from '../../messages/dto/has-visible-text.validator';
 import { IsRecipientList } from '../../messages/dto/recipient-list.validator';
 import { MAX_BODY_LENGTH } from '../../messages/dto/send-message.dto';
 import { ATTACHMENT_ID } from '../../messages/pipes/parse-gmail-id.pipe';
+import { BODY_TOO_LONG, notText, tooLong, tooMany } from '../../common/validation-messages';
 
 /**
  * Body de PATCH /scheduled-messages/:id. Todo es opcional: lo que no viene,
@@ -52,14 +53,14 @@ export class UpdateScheduledMessageDto {
 
   @IsOptional()
   @Transform(trimString)
-  @IsString()
+  @IsString({ message: notText('subject') })
   @IsNotEmpty({ message: 'subject no puede estar vacío' })
-  @MaxLength(500)
+  @MaxLength(500, { message: tooLong('subject', 500) })
   subject?: string;
 
   @IsOptional()
-  @IsString()
-  @MaxLength(MAX_BODY_LENGTH)
+  @IsString({ message: notText('body') })
+  @MaxLength(MAX_BODY_LENGTH, { message: BODY_TOO_LONG })
   @HasVisibleText()
   body?: string;
 
@@ -70,14 +71,14 @@ export class UpdateScheduledMessageDto {
   @IsOptional()
   @Transform(toArrayField())
   @IsArray({ message: 'keepAttachmentIds tiene que ser una lista' })
-  @ArrayMaxSize(MAX_ATTACHMENTS)
+  @ArrayMaxSize(MAX_ATTACHMENTS, { message: tooMany('keepAttachmentIds', MAX_ATTACHMENTS) })
   @Matches(ATTACHMENT_ID, { each: true, message: 'keepAttachmentIds tiene ids inválidos' })
   keepAttachmentIds?: string[];
 
   @IsOptional()
   @Transform(toArrayField(ForwardedAttachmentDto))
   @IsArray({ message: 'forwardedAttachments tiene que ser una lista' })
-  @ArrayMaxSize(MAX_ATTACHMENTS)
+  @ArrayMaxSize(MAX_ATTACHMENTS, { message: tooMany('forwardedAttachments', MAX_ATTACHMENTS) })
   @ValidateNested({ each: true })
   forwardedAttachments?: ForwardedAttachmentDto[];
 }

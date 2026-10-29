@@ -1,5 +1,6 @@
 import { ArrayMaxSize, IsArray, Matches } from 'class-validator';
 import { DRIVE_ID } from '../drive-query';
+import { tooMany } from '../../common/validation-messages';
 
 export const MAX_DRIVE_ITEMS = 200;
 
@@ -9,7 +10,7 @@ export const MAX_DRIVE_ITEMS = 200;
  */
 export class UpdateDriveAccessDto {
   @IsArray({ message: 'itemIds tiene que ser una lista' })
-  @ArrayMaxSize(MAX_DRIVE_ITEMS)
+  @ArrayMaxSize(MAX_DRIVE_ITEMS, { message: tooMany('itemIds', MAX_DRIVE_ITEMS) })
   @Matches(DRIVE_ID, { each: true, message: 'itemIds tiene ids inválidos' })
   itemIds: string[];
 }
