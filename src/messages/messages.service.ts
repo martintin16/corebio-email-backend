@@ -826,13 +826,6 @@ export function toMessageSummary(message: GmailMessage): MessageSummary {
 }
 
 /**
- * ¿Trae adjuntos? Con el formato `metadata` (el de las listas) Gmail no manda
- * las partes del mensaje, pero sí su tipo: un mail con adjuntos es
- * `multipart/mixed`. Las imágenes pegadas en el texto van como
- * `multipart/related` y no cuentan. Un mail que es directamente un archivo
- * (sin texto) tampoco es `text/*` ni `multipart/*`.
- */
-/**
  * Las etiquetas de Gmail se ponen a la conversación entera, así que filtrar
  * por etiqueta también traería lo que mandó la casilla y los borradores (un
  * programado pendiente es un borrador). El filtro es de Recibidos: se sacan.
@@ -842,6 +835,13 @@ export function withoutOwnMessages(q?: string): string {
   return [q, '-in:drafts -in:sent'].filter(Boolean).join(' ');
 }
 
+/**
+ * ¿Trae adjuntos? Con el formato `metadata` (el de las listas) Gmail no manda
+ * las partes del mensaje, pero sí su tipo: un mail con adjuntos es
+ * `multipart/mixed`. Las imágenes pegadas en el texto van como
+ * `multipart/related` y no cuentan. Un mail que es directamente un archivo
+ * (sin texto) tampoco es `text/*` ni `multipart/*`.
+ */
 export function hasAttachments(message: GmailMessage): boolean {
   const type = (message.payload?.mimeType ?? '').toLowerCase();
   if (!type) return false;
