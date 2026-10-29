@@ -1029,7 +1029,8 @@ La primera prueba del front conectado encontró dos fallos con los nombres de lo
   de 1 MB (el de multer) a 2 MB, con 413 "El texto del mensaje es demasiado largo (máximo 2 MB)".
 - Tests: e2e de plantillas (300 KB pasa, más de 2 MB → 413 en castellano) y unit de la traducción del
   error de multer.
-- ⏳ `lint`, `typecheck`, `test`, `test:e2e`, `build`.
+- ✅ `lint` (sin errores), `typecheck`, `test` (435), `test:e2e` (180), `build`. Desde la app, una
+  plantilla de 300 KB se guarda.
 
 ### ⏳ Pendiente
 
