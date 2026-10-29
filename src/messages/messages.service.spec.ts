@@ -828,10 +828,17 @@ describe('MessagesService', () => {
       expect(summary.labelIds).toEqual(['Label_1']);
     });
 
-    it('con labelId lista esa etiqueta en vez de Recibidos', async () => {
+    it('con labelId lista esa etiqueta, sin enviados ni borradores', async () => {
       await service.listInbox(MBX, 'Label_1');
       expect(gmail.users.messages.list).toHaveBeenCalledWith(
-        expect.objectContaining({ labelIds: ['Label_1'] }),
+        expect.objectContaining({ labelIds: ['Label_1'], q: '-in:drafts -in:sent' }),
+      );
+    });
+
+    it('con labelId y búsqueda, combina las dos', async () => {
+      await service.listInbox(MBX, 'Label_1', undefined, 'banco');
+      expect(gmail.users.messages.list).toHaveBeenCalledWith(
+        expect.objectContaining({ labelIds: ['Label_1'], q: 'banco -in:drafts -in:sent' }),
       );
     });
 

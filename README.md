@@ -1055,6 +1055,9 @@ La primera prueba del front conectado encontró dos fallos con los nombres de lo
 - **Búsqueda**: `?q=` en Recibidos (también con `?labelId=`) y en Enviados. Es la búsqueda de Gmail
   (`users.messages.list` con `q`): texto libre y operadores (`from:`, `has:attachment`, `after:`).
   Pagina igual que la lista normal. Vacía = sin búsqueda; más de 200 caracteres → 400.
+- **Etiqueta = solo recibidos**: con `?labelId=` se suma `-in:drafts -in:sent` a la búsqueda. Las
+  etiquetas de Gmail van en la conversación entera y si no, el filtro traía las respuestas de la casilla
+  y los programados pendientes (que en Gmail son borradores). Los archivados siguen entrando.
 - **Clip**: `hasAttachments` en los resúmenes de Recibidos y Enviados. Sale del tipo del mensaje que
   Gmail ya manda en la lista (`multipart/mixed` = con adjuntos; las imágenes pegadas en el texto van
   como `multipart/related` y no cuentan): sin pedidos extra.
@@ -1067,7 +1070,11 @@ La primera prueba del front conectado encontró dos fallos con los nombres de lo
 **Verificación**
 - Tests: unit (q, `hasAttachments`, hilo ordenado y filtrado, 404, `inboxUnread`) y e2e (`?q=`, hilo
   con canRead y 403 sin acceso, `inboxUnread`).
-- ⏳ `lint`, `typecheck`, `test`, `test:e2e`, `build`.
+- ✅ `lint` (sin errores), `typecheck`, `test` (449), `test:e2e` (184), `build` (después de
+  `1ce59bc`: el primer commit no compilaba por `hasAttachments` en enviar/responder).
+- ✅ Con el front: búsqueda (texto, `from:`, `has:attachment`, sin resultados, "Cargar más"), etiqueta +
+  búsqueda, clip, conversación en recibidos y enviados, "(1) Corebio Mail".
+- ❌→ corregido: el filtro por etiqueta traía el programado pendiente (borrador) y las respuestas enviadas.
 
 ### ⏳ Pendiente
 
